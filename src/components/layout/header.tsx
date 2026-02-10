@@ -27,21 +27,18 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { useFileManager } from "@/store/file-manager"
+import { useFileStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 
 export function Header() {
-  const { currentPath, viewMode, setViewMode, navigateBack } = useFileManager()
+  const { currentPath, viewMode, toggleViewMode, navigateUp, setPath } = useFileStore()
 
-  // Parse breadcrumb from path
-  const pathParts = currentPath.split("/").filter(Boolean)
-  const breadcrumbs = [
-    { label: "Home", path: "/" },
-    ...pathParts.map((part, index) => ({
-      label: part,
-      path: "/" + pathParts.slice(0, index + 1).join("/"),
-    })),
-  ]
+  // 处理面包屑点击
+  const handleBreadcrumbClick = (index: number) => {
+    if (index < currentPath.length - 1) {
+      setPath(currentPath.slice(0, index + 1))
+    }
+  }
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/95 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -53,8 +50,8 @@ export function Header() {
               <Button 
                 variant="ghost" 
                 size="icon"
-                onClick={navigateBack}
-                disabled={currentPath === "/"}
+                onClick={navigateUp}
+                disabled={currentPath.length <= 1}
               >
                 <ChevronRight className="h-4 w-4 rotate-180" />
               </Button>
@@ -64,21 +61,22 @@ export function Header() {
         </TooltipProvider>
 
         <nav className="flex items-center gap-1">
-          {breadcrumbs.map((crumb, index) => (
-            <div key={crumb.path} className="flex items-center">
+          {currentPath.map((crumb, index) => (
+            <div key={crumb.id} className="flex items-center">
               {index > 0 && (
                 <ChevronRight className="mx-1 h-4 w-4 text-muted-foreground" />
               )}
               <button
+                onClick={() => handleBreadcrumbClick(index)}
                 className={cn(
                   "flex items-center gap-1.5 rounded-md px-2 py-1 text-sm transition-colors hover:bg-accent",
-                  index === breadcrumbs.length - 1
+                  index === currentPath.length - 1
                     ? "font-medium text-foreground"
                     : "text-muted-foreground"
                 )}
               >
                 {index === 0 && <Home className="h-4 w-4" />}
-                <span>{crumb.label}</span>
+                <span>{crumb.name}</span>
               </button>
             </div>
           ))}
@@ -107,7 +105,7 @@ export function Header() {
                   variant={viewMode === "grid" ? "secondary" : "ghost"}
                   size="icon"
                   className="h-7 w-7"
-                  onClick={() => setViewMode("grid")}
+                  onClick={() => viewMode !== "grid" && toggleViewMode()}
                 >
                   <Grid3X3 className="h-4 w-4" />
                 </Button>
@@ -123,7 +121,7 @@ export function Header() {
                   variant={viewMode === "list" ? "secondary" : "ghost"}
                   size="icon"
                   className="h-7 w-7"
-                  onClick={() => setViewMode("list")}
+                  onClick={() => viewMode !== "list" && toggleViewMode()}
                 >
                   <List className="h-4 w-4" />
                 </Button>

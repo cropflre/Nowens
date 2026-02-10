@@ -3,13 +3,21 @@
 import { useEffect, useState } from "react";
 import { useFileStore } from "@/lib/store";
 import { FileCard } from "./file-card";
+import { FileListItem } from "./file-list-item";
 import { getFiles } from "@/app/actions"; 
 import { FileObj } from "@/lib/mock-data"; 
-import { FolderOpen, Loader2 } from "lucide-react";
+import { FolderOpen, Loader2, Grid3X3, List } from "lucide-react";
 import { MediaViewer } from "./media-viewer";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 export function FileBrowser() {
-  const { currentPath, navigateTo } = useFileStore();
+  const { currentPath, navigateTo, viewMode, toggleViewMode } = useFileStore();
   const [files, setFiles] = useState<FileObj[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -54,7 +62,7 @@ export function FileBrowser() {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-muted-foreground animate-pulse">
         <Loader2 className="h-10 w-10 animate-spin mb-2" />
-        <p>Scanning drive...</p>
+        <p>正在扫描...</p>
       </div>
     );
   }
@@ -64,7 +72,7 @@ export function FileBrowser() {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
         <FolderOpen className="h-16 w-16 mb-4 opacity-20" />
-        <p>This folder is empty.</p>
+        <p>文件夹为空</p>
       </div>
     );
   }
@@ -72,13 +80,75 @@ export function FileBrowser() {
   // 3. 正常显示
   return (
     <>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 pb-20">
-        {files.map((file) => (
-          <div key={file.id} onClick={() => handleFileClick(file)}>
-             <FileCard file={file} />
-          </div>
-        ))}
+      {/* 视图切换工具栏 */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-sm text-muted-foreground">
+          共 {files.length} 个项目
+        </div>
+        <div className="flex items-center gap-1 rounded-lg border border-border p-1">
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={viewMode === "grid" ? "secondary" : "ghost"}
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => viewMode !== "grid" && toggleViewMode()}
+                >
+                  <Grid3X3 className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>网格视图</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={viewMode === "list" ? "secondary" : "ghost"}
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => viewMode !== "list" && toggleViewMode()}
+                >
+                  <List className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>列表视图</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       </div>
+
+      {/* 文件列表 - 根据视图模式显示 */}
+      {viewMode === "grid" ? (
+        // 网格视图
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 pb-20">
+          {files.map((file) => (
+            <div key={file.id} onClick={() => handleFileClick(file)}>
+              <FileCard file={file} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        // 列表视图
+        <div className="rounded-lg border border-border bg-card/50 overflow-hidden pb-20">
+          {/* 列表头部 */}
+          <div className="flex items-center gap-4 px-4 py-2 bg-muted/30 border-b border-border text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            <div className="w-10"></div>
+            <div className="flex-1">名称</div>
+            <div className="hidden sm:block w-24 text-right">大小</div>
+            <div className="hidden md:block w-36 text-right">修改时间</div>
+            <div className="w-8"></div>
+          </div>
+          {/* 文件列表 */}
+          {files.map((file) => (
+            <div key={file.id} onClick={() => handleFileClick(file)}>
+              <FileListItem file={file} />
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* 媒体播放器组件挂载在这里 */}
       <MediaViewer 

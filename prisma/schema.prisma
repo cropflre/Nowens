@@ -1,0 +1,25 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model FileRecord {
+  id        String   @id @default(uuid())
+  path      String   @unique // 文件的绝对路径
+  name      String
+  size      BigInt   // 使用 BigInt 因为视频文件可能很大
+  hash      String?  // 文件指纹 (MD5/SHA256)
+  mtime     DateTime? // 文件修改时间
+  scannedAt DateTime @default(now())
+  
+  // 索引优化查询速度
+  @@index([size]) 
+  @@index([hash])
+}

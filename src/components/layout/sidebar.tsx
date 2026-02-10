@@ -10,7 +10,9 @@ import {
   Image, 
   FileText,
   Settings,
-  ChevronDown
+  ChevronDown,
+  Copy,
+  Trash2
 } from "lucide-react"
 import { cn, formatFileSize } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -18,17 +20,24 @@ import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { useFileManager, useStorage } from "@/store/file-manager"
+import Link from "next/link"
+import { usePathname } from "next/navigation"
 
 interface NavItem {
   icon: React.ElementType
   label: string
   path: string
   color?: string
+  isLink?: boolean
 }
 
 const mainNavItems: NavItem[] = [
-  { icon: Cloud, label: "My Cloud", path: "/", color: "text-blue-400" },
+  { icon: Cloud, label: "My Cloud", path: "/", color: "text-blue-400", isLink: true },
   { icon: HardDrive, label: "所有文件", path: "/files" },
+]
+
+const toolItems: NavItem[] = [
+  { icon: Copy, label: "重复文件清理", path: "/deduplicate", color: "text-orange-400", isLink: true },
 ]
 
 const favoriteItems: NavItem[] = [
@@ -43,6 +52,7 @@ const favoriteItems: NavItem[] = [
 export function Sidebar() {
   const { currentPath, setCurrentPath } = useFileManager()
   const { storage } = useStorage()
+  const pathname = usePathname()
   
   const usedPercentage = (storage.used / storage.total) * 100
 
@@ -68,8 +78,27 @@ export function Sidebar() {
               <NavButton
                 key={item.path}
                 item={item}
-                isActive={currentPath === item.path}
-                onClick={() => setCurrentPath(item.path)}
+                isActive={item.isLink ? pathname === item.path : currentPath === item.path}
+                onClick={() => !item.isLink && setCurrentPath(item.path)}
+              />
+            ))}
+          </div>
+
+          <Separator className="my-4" />
+
+          {/* Tools */}
+          <div className="mb-2 flex items-center justify-between px-3">
+            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              工具
+            </span>
+          </div>
+          <div className="space-y-1">
+            {toolItems.map((item) => (
+              <NavButton
+                key={item.path}
+                item={item}
+                isActive={pathname === item.path}
+                onClick={() => {}}
               />
             ))}
           </div>
@@ -123,9 +152,8 @@ interface NavButtonProps {
 function NavButton({ item, isActive, onClick }: NavButtonProps) {
   const Icon = item.icon
   
-  return (
-    <button
-      onClick={onClick}
+  const buttonContent = (
+    <span
       className={cn(
         "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
         "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -136,6 +164,20 @@ function NavButton({ item, isActive, onClick }: NavButtonProps) {
     >
       <Icon className={cn("h-5 w-5", item.color)} />
       <span>{item.label}</span>
+    </span>
+  )
+  
+  if (item.isLink) {
+    return (
+      <Link href={item.path}>
+        {buttonContent}
+      </Link>
+    )
+  }
+  
+  return (
+    <button onClick={onClick} className="w-full">
+      {buttonContent}
     </button>
   )
 }
