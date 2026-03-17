@@ -59,6 +59,7 @@ export default function FileEditor() {
     try {
       const res = await getTextContent(uuid)
       const data = res.data
+      if (!data) throw new Error('返回数据为空')
       setContent(data.content)
       setOriginalContent(data.content)
       setFileName(data.file.name)
