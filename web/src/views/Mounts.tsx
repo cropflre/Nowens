@@ -7,8 +7,10 @@ import {
   PlusOutlined, MoreOutlined, ReloadOutlined,
   EditOutlined, DeleteOutlined, LoadingOutlined,
   FolderOpenOutlined, ApiOutlined, DesktopOutlined, RobotOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons'
 import { listMounts, createMount, updateMount, deleteMount, scanMount } from '@/api/mount'
+import { getScheduleByMount, createSyncSchedule, updateSyncSchedule, deleteSyncSchedule } from '@/api/dashboard'
 import { formatFileSize, formatDate } from '@/utils'
 import type { MountPoint } from '@/types'
 
@@ -20,6 +22,14 @@ export default function Mounts() {
   const [submitting, setSubmitting] = useState(false)
   const [editingMount, setEditingMount] = useState<MountPoint | null>(null)
   const [form] = Form.useForm()
+
+  // 定时同步状态
+  const [showSchedule, setShowSchedule] = useState(false)
+  const [scheduleMount, setScheduleMount] = useState<MountPoint | null>(null)
+  const [scheduleData, setScheduleData] = useState<any>(null)
+  const [cronExpr, setCronExpr] = useState('0 */6 * * *')
+  const [scheduleEnabled, setScheduleEnabled] = useState(true)
+  const [scheduleSubmitting, setScheduleSubmitting] = useState(false)
 
   useEffect(() => { loadMounts() }, [])
 
@@ -99,6 +109,23 @@ export default function Mounts() {
         smb_pass: '',
       })
       setShowDialog(true)
+    } else if (key === 'schedule') {
+      setScheduleMount(mount)
+      setShowSchedule(true)
+      try {
+        const res = await getScheduleByMount(mount.id)
+        if (res.data) {
+          setScheduleData(res.data)
+          setCronExpr(res.data.cron_expr)
+          setScheduleEnabled(res.data.enabled)
+        } else {
+          setScheduleData(null)
+          setCronExpr('0 */6 * * *')
+          setScheduleEnabled(true)
+        }
+      } catch {
+        setScheduleData(null)
+      }
     } else if (key === 'delete') {
       Modal.confirm({
         title: '删除确认',
@@ -173,6 +200,7 @@ export default function Mounts() {
                       menu={{
                         items: [
                           { key: 'scan', icon: <ReloadOutlined />, label: '重新扫描' },
+                          { key: 'schedule', icon: <ClockCircleOutlined />, label: '定时同步' },
                           { key: 'edit', icon: <EditOutlined />, label: '编辑' },
                           { type: 'divider' },
                           { key: 'delete', icon: <DeleteOutlined style={{ color: '#f5222d' }} />, label: <span style={{ color: '#f5222d' }}>删除</span> },
@@ -278,6 +306,106 @@ export default function Mounts() {
             }
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 定时同步配置弹窗 */}
+      <Modal
+        title={<span><ClockCircleOutlined /> 定时同步 - {scheduleMount?.name}</span>}
+        open={showSchedule}
+        onCancel={() => setShowSchedule(false)}
+        footer={null}
+        width={460}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 13, color: '#909399', marginBottom: 12 }}>
+            配置 Cron 表达式来设定自动同步频率。格式：分 时 日 月 周
+          </div>
+
+          {/* 快捷选项 */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+            {[
+              { label: '每小时', value: '0 * * * *' },
+              { label: '每3小时', value: '0 */3 * * *' },
+              { label: '每6小时', value: '0 */6 * * *' },
+              { label: '每12小时', value: '0 */12 * * *' },
+              { label: '每天', value: '0 0 * * *' },
+            ].map((preset) => (
+              <Tag
+                key={preset.value}
+                color={cronExpr === preset.value ? 'blue' : 'default'}
+                style={{ cursor: 'pointer' }}
+                onClick={() => setCronExpr(preset.value)}
+              >
+                {preset.label}
+              </Tag>
+            ))}
+          </div>
+
+          <Input
+            value={cronExpr}
+            onChange={(e) => setCronExpr(e.target.value)}
+            placeholder="例如: 0 */6 * * *"
+            addonBefore="Cron"
+          />
+
+          {scheduleData && (
+            <div style={{ marginTop: 12, fontSize: 13, color: '#606266' }}>
+              <div>状态：{scheduleData.enabled ? <Tag color="success">已启用</Tag> : <Tag color="default">已禁用</Tag>}</div>
+              {scheduleData.last_run && <div>上次执行：{formatDate(scheduleData.last_run)}</div>}
+              {scheduleData.next_run && <div>下次执行：{formatDate(scheduleData.next_run)}</div>}
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          {scheduleData && (
+            <>
+              <Button
+                danger
+                onClick={async () => {
+                  try {
+                    await deleteSyncSchedule(scheduleData.id)
+                    message.success('定时任务已删除')
+                    setScheduleData(null)
+                  } catch {}
+                }}
+              >
+                删除任务
+              </Button>
+              <Button
+                onClick={async () => {
+                  try {
+                    await updateSyncSchedule(scheduleData.id, { enabled: !scheduleData.enabled })
+                    message.success(scheduleData.enabled ? '已禁用' : '已启用')
+                    setScheduleData({ ...scheduleData, enabled: !scheduleData.enabled })
+                  } catch {}
+                }}
+              >
+                {scheduleData.enabled ? '禁用' : '启用'}
+              </Button>
+            </>
+          )}
+          <Button
+            type="primary"
+            loading={scheduleSubmitting}
+            onClick={async () => {
+              if (!scheduleMount) return
+              setScheduleSubmitting(true)
+              try {
+                if (scheduleData) {
+                  await updateSyncSchedule(scheduleData.id, { cron_expr: cronExpr, enabled: true })
+                  message.success('更新成功')
+                } else {
+                  await createSyncSchedule({ mount_id: scheduleMount.id, cron_expr: cronExpr })
+                  message.success('定时任务创建成功')
+                }
+                setShowSchedule(false)
+              } catch {} finally { setScheduleSubmitting(false) }
+            }}
+          >
+            {scheduleData ? '更新' : '创建定时任务'}
+          </Button>
+        </div>
       </Modal>
     </div>
   )

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"nowen-file/service"
@@ -11,8 +12,9 @@ import (
 
 // ShareHandler 分享接口
 type ShareHandler struct {
-	shareService *service.ShareService
-	fileService  *service.FileService
+	shareService        *service.ShareService
+	fileService         *service.FileService
+	notificationService *service.NotificationService
 }
 
 // NewShareHandler 创建分享接口实例（兼容旧接口）
@@ -26,8 +28,9 @@ func NewShareHandler(uploadDir string) *ShareHandler {
 // NewShareHandlerWithFileService 使用已有的 FileService 创建分享接口
 func NewShareHandlerWithFileService(fs *service.FileService) *ShareHandler {
 	return &ShareHandler{
-		shareService: service.NewShareService(),
-		fileService:  fs,
+		shareService:        service.NewShareService(),
+		fileService:         fs,
+		notificationService: service.NewNotificationService(),
 	}
 }
 
@@ -84,6 +87,15 @@ func (h *ShareHandler) GetShare(c *gin.Context) {
 		})
 		return
 	}
+
+	// 发送通知：分享被查看
+	go h.notificationService.CreateNotification(
+		share.UserID,
+		service.NotifyShareViewed,
+		"分享被查看",
+		fmt.Sprintf("你分享的文件「%s」被人查看了", file.Name),
+		share.ID,
+	)
 
 	previewType := service.GetPreviewType(file.MimeType)
 	previewable := service.IsPreviewable(file.MimeType)

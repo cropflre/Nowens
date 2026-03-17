@@ -9,18 +9,28 @@ import {
   AppstoreOutlined, UnorderedListOutlined, DeleteOutlined,
   DownloadOutlined, ShareAltOutlined, EditOutlined,
   EyeOutlined, DragOutlined, HistoryOutlined, CheckSquareOutlined,
-  LoadingOutlined,
+  LoadingOutlined, StarOutlined, StarFilled, TagsOutlined, LockOutlined, UnlockOutlined,
 } from '@ant-design/icons'
 import { useFileStore } from '@/stores/file'
-import type { FileItem, ShareLink } from '@/types'
+import type { FileItem, ShareLink, Tag as TagType } from '@/types'
 import { formatFileSize, formatDate, getFileIcon, getFileColor } from '@/utils'
 import {
   createFolder, uploadFile, renameFile, trashFile,
   searchFiles, getDownloadUrl, batchTrash,
 } from '@/api/file'
 import { createShare } from '@/api/share'
+import { addFavorite, removeFavorite, checkFavorite } from '@/api/favorite'
+import { getTags, tagFile, untagFile, getFileTags } from '@/api/tag'
+import { encryptFile, decryptFile } from '@/api/encryption'
 import FilePreview from '@/components/FilePreview'
 import FileVersions from '@/components/FileVersions'
+
+// 判断文件是否支持在线编辑
+function isTextEditable(mimeType: string): boolean {
+  if (!mimeType) return false
+  if (mimeType.startsWith('text/')) return true
+  return ['application/json', 'application/xml', 'application/javascript', 'application/x-yaml'].includes(mimeType)
+}
 
 export default function Files() {
   const [searchParams] = useSearchParams()
@@ -69,6 +79,21 @@ export default function Files() {
   const [showVersions, setShowVersions] = useState(false)
   const [versionTarget, setVersionTarget] = useState<FileItem | null>(null)
 
+  // 收藏状态
+  const [favoritedIds, setFavoritedIds] = useState<Set<number>>(new Set())
+
+  // 标签
+  const [showTagModal, setShowTagModal] = useState(false)
+  const [tagTarget, setTagTarget] = useState<FileItem | null>(null)
+  const [allTags, setAllTags] = useState<TagType[]>([])
+  const [fileTags, setFileTags] = useState<TagType[]>([])
+
+  // 加密
+  const [showEncrypt, setShowEncrypt] = useState(false)
+  const [encryptTarget, setEncryptTarget] = useState<FileItem | null>(null)
+  const [encryptPassword, setEncryptPassword] = useState('')
+  const [encryptAction, setEncryptAction] = useState<'encrypt' | 'decrypt'>('encrypt')
+
   const displayFiles = isSearchMode ? searchResults : fileStore.files
 
   // 加载文件列表
@@ -80,6 +105,54 @@ export default function Files() {
       fileStore.loadFiles(0)
     }
   }, [searchParams.get('search')])
+
+  // 收藏：切换收藏状态
+  const handleToggleFavorite = async (file: FileItem) => {
+    try {
+      if (favoritedIds.has(file.id)) {
+        await removeFavorite(file.id)
+        setFavoritedIds((prev) => { const next = new Set(prev); next.delete(file.id); return next })
+        message.success('已取消收藏')
+      } else {
+        await addFavorite(file.id)
+        setFavoritedIds((prev) => new Set(prev).add(file.id))
+        message.success('已收藏')
+      }
+    } catch {}
+  }
+
+  // 标签：打开标签弹窗
+  const handleOpenTagModal = async (file: FileItem) => {
+    setTagTarget(file)
+    setShowTagModal(true)
+    try {
+      const [tagsRes, fileTagsRes] = await Promise.all([
+        getTags(),
+        getFileTags(file.id),
+      ])
+      setAllTags(tagsRes.data || [])
+      setFileTags(fileTagsRes.data || [])
+    } catch {}
+  }
+
+  const handleTagFile = async (tagId: number) => {
+    if (!tagTarget) return
+    try {
+      await tagFile({ file_id: tagTarget.id, tag_id: tagId })
+      const res = await getFileTags(tagTarget.id)
+      setFileTags(res.data || [])
+      message.success('标签已添加')
+    } catch {}
+  }
+
+  const handleUntagFile = async (tagId: number) => {
+    if (!tagTarget) return
+    try {
+      await untagFile(tagTarget.id, tagId)
+      setFileTags((prev) => prev.filter((t) => t.id !== tagId))
+      message.success('标签已移除')
+    } catch {}
+  }
 
   // ==================== 文件操作 ====================
   const handleClick = (file: FileItem) => {
@@ -248,6 +321,22 @@ export default function Files() {
     } else if (action === 'versions') {
       setVersionTarget(file)
       setShowVersions(true)
+    } else if (action === 'favorite') {
+      handleToggleFavorite(file)
+    } else if (action === 'tag') {
+      handleOpenTagModal(file)
+    } else if (action === 'edit') {
+      navigate(`/editor?uuid=${file.uuid}`)
+    } else if (action === 'encrypt') {
+      setEncryptTarget(file)
+      setEncryptAction('encrypt')
+      setEncryptPassword('')
+      setShowEncrypt(true)
+    } else if (action === 'decrypt') {
+      setEncryptTarget(file)
+      setEncryptAction('decrypt')
+      setEncryptPassword('')
+      setShowEncrypt(true)
     }
   }
 
@@ -283,6 +372,7 @@ export default function Files() {
             📁
           </span>
           <span className="text-ellipsis">{record.name}</span>
+          {record.is_encrypted && <LockOutlined style={{ color: '#faad14', fontSize: 12 }} title="已加密" />}
         </div>
       ),
     },
@@ -320,6 +410,11 @@ export default function Files() {
               items: [
                 { key: 'rename', label: '重命名' },
                 ...(!record.is_dir ? [{ key: 'versions', label: '版本历史' }] : []),
+                ...(!record.is_dir && isTextEditable(record.mime_type) ? [{ key: 'edit', label: '在线编辑', icon: <EditOutlined /> }] : []),
+                ...(!record.is_dir && !record.is_encrypted ? [{ key: 'encrypt', label: '加密文件', icon: <LockOutlined /> }] : []),
+                ...(!record.is_dir && record.is_encrypted ? [{ key: 'decrypt', label: '解密文件', icon: <UnlockOutlined /> }] : []),
+                { key: 'favorite', label: favoritedIds.has(record.id) ? '取消收藏' : '收藏', icon: favoritedIds.has(record.id) ? <StarFilled style={{ color: '#faad14' }} /> : <StarOutlined /> },
+                { key: 'tag', label: '管理标签', icon: <TagsOutlined /> },
                 { type: 'divider' as const },
                 { key: 'trash', label: <span style={{ color: '#f5222d' }}>删除</span> },
               ],
@@ -579,6 +674,103 @@ export default function Files() {
         onClose={() => setShowVersions(false)}
         onRestored={() => fileStore.loadFiles()}
       />
+
+      {/* 标签管理弹窗 */}
+      <Modal
+        title={<span><TagsOutlined /> 管理标签 - {tagTarget?.name}</span>}
+        open={showTagModal}
+        onCancel={() => setShowTagModal(false)}
+        footer={<Button onClick={() => setShowTagModal(false)}>关闭</Button>}
+        width={420}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 13, color: '#909399', marginBottom: 8 }}>已添加的标签：</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {fileTags.length === 0 ? (
+              <span style={{ color: '#c0c4cc', fontSize: 13 }}>暂无标签</span>
+            ) : (
+              fileTags.map((tag) => (
+                <Tag
+                  key={tag.id}
+                  closable
+                  color={tag.color}
+                  onClose={() => handleUntagFile(tag.id)}
+                >
+                  {tag.name}
+                </Tag>
+              ))
+            )}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 13, color: '#909399', marginBottom: 8 }}>点击添加标签：</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {allTags
+              .filter((t) => !fileTags.some((ft) => ft.id === t.id))
+              .map((tag) => (
+                <Tag
+                  key={tag.id}
+                  style={{ cursor: 'pointer' }}
+                  color={tag.color}
+                  onClick={() => handleTagFile(tag.id)}
+                >
+                  + {tag.name}
+                </Tag>
+              ))}
+            {allTags.filter((t) => !fileTags.some((ft) => ft.id === t.id)).length === 0 && (
+              <span style={{ color: '#c0c4cc', fontSize: 13 }}>没有更多标签可添加</span>
+            )}
+          </div>
+        </div>
+      </Modal>
+
+      {/* 加密/解密弹窗 */}
+      <Modal
+        title={<span>{encryptAction === 'encrypt' ? <><LockOutlined /> 加密文件</> : <><UnlockOutlined /> 解密文件</>} - {encryptTarget?.name}</span>}
+        open={showEncrypt}
+        onCancel={() => setShowEncrypt(false)}
+        onOk={async () => {
+          if (!encryptTarget || !encryptPassword) {
+            message.warning('请输入密码')
+            return
+          }
+          if (encryptPassword.length < 6) {
+            message.warning('密码至少 6 位')
+            return
+          }
+          try {
+            if (encryptAction === 'encrypt') {
+              await encryptFile({ file_id: encryptTarget.id, password: encryptPassword })
+              message.success('文件已加密')
+            } else {
+              await decryptFile({ file_id: encryptTarget.id, password: encryptPassword })
+              message.success('文件已解密')
+            }
+            setShowEncrypt(false)
+            fileStore.loadFiles()
+          } catch {}
+        }}
+        okText={encryptAction === 'encrypt' ? '加密' : '解密'}
+        width={400}
+      >
+        <div style={{ marginBottom: 12, fontSize: 13, color: '#909399' }}>
+          {encryptAction === 'encrypt'
+            ? '文件将使用 AES-256-GCM 加密存储。请牢记密码，遗忘后无法恢复！'
+            : '请输入加密时设置的密码来解密此文件。'}
+        </div>
+        <Input.Password
+          value={encryptPassword}
+          onChange={(e) => setEncryptPassword(e.target.value)}
+          placeholder={encryptAction === 'encrypt' ? '设置加密密码（至少6位）' : '输入解密密码'}
+          size="large"
+          onPressEnter={() => {/* 由 onOk 处理 */}}
+        />
+        {encryptAction === 'encrypt' && (
+          <div style={{ marginTop: 12, padding: '8px 12px', background: '#fff7e6', borderRadius: 6, fontSize: 12, color: '#d48806' }}>
+            ⚠️ 加密后文件将无法预览和在线编辑，需要解密后才能正常使用。
+          </div>
+        )}
+      </Modal>
 
       {/* 上传进度 */}
       {uploadTasks.length > 0 && (

@@ -1,0 +1,51 @@
+services:
+  nowen-file:
+    build: .
+    image: nowen-file:latest
+    container_name: nowen-file
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - nowen-data:/app/data
+    environment:
+      - NOWEN_PORT=8080
+      - NOWEN_JWT_SECRET=your-secret-key-change-me
+      - NOWEN_STORAGE_TYPE=local
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/auth/login"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # 可选：使用 MinIO 作为 S3 存储后端
+  # minio:
+  #   image: minio/minio:latest
+  #   container_name: nowen-minio
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9000:9000"
+  #     - "9001:9001"
+  #   volumes:
+  #     - minio-data:/data
+  #   environment:
+  #     - MINIO_ROOT_USER=minioadmin
+  #     - MINIO_ROOT_PASSWORD=minioadmin
+  #   command: server /data --console-address ":9001"
+
+  # 使用 S3 存储时的配置：
+  # nowen-file:
+  #   environment:
+  #     - NOWEN_STORAGE_TYPE=s3
+  #     - NOWEN_S3_ENDPOINT=minio:9000
+  #     - NOWEN_S3_BUCKET=nowen-file
+  #     - NOWEN_S3_ACCESS_KEY=minioadmin
+  #     - NOWEN_S3_SECRET_KEY=minioadmin
+  #     - NOWEN_S3_USE_SSL=false
+
+volumes:
+  nowen-data:
+    driver: local
+  # minio-data:
+  #   driver: local

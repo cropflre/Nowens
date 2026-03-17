@@ -27,7 +27,7 @@ func InitDB(cfg *config.Config) error {
 	}
 
 	// 自动迁移
-	if err := DB.AutoMigrate(&User{}, &FileItem{}, &ShareLink{}, &FileVersion{}, &AuditLog{}, &MountPoint{}, &IndexedFile{}); err != nil {
+	if err := DB.AutoMigrate(&User{}, &FileItem{}, &ShareLink{}, &FileVersion{}, &AuditLog{}, &MountPoint{}, &IndexedFile{}, &Favorite{}, &Tag{}, &FileTag{}, &Notification{}, &SyncSchedule{}, &Workspace{}, &WorkspaceMember{}, &FolderPermission{}); err != nil {
 		return err
 	}
 
@@ -54,20 +54,21 @@ type User struct {
 
 // FileItem 文件或文件夹
 type FileItem struct {
-	ID        uint       `gorm:"primarykey" json:"id"`
-	UUID      string     `gorm:"uniqueIndex;size:36;not null" json:"uuid"` // 唯一标识，用于URL
-	UserID    uint       `gorm:"index;not null" json:"user_id"`            // 所属用户
-	ParentID  uint       `gorm:"index;default:0" json:"parent_id"`         // 父文件夹ID，0 为根目录
-	Name      string     `gorm:"size:512;not null" json:"name"`            // 文件/文件夹名
-	IsDir     bool       `gorm:"default:false" json:"is_dir"`              // 是否为文件夹
-	Size      int64      `gorm:"default:0" json:"size"`                    // 文件大小（字节）
-	MimeType  string     `gorm:"size:256" json:"mime_type"`                // MIME 类型
-	StorePath string     `gorm:"size:1024" json:"-"`                       // 磁盘存储路径（不返回前端）
-	Hash      string     `gorm:"size:64;index" json:"hash"`                // 文件哈希（用于秒传/去重）
-	IsTrash   bool       `gorm:"default:false;index" json:"is_trash"`      // 是否在回收站
-	TrashedAt *time.Time `json:"trashed_at,omitempty"`                     // 删除时间
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID          uint       `gorm:"primarykey" json:"id"`
+	UUID        string     `gorm:"uniqueIndex;size:36;not null" json:"uuid"` // 唯一标识，用于URL
+	UserID      uint       `gorm:"index;not null" json:"user_id"`            // 所属用户
+	ParentID    uint       `gorm:"index;default:0" json:"parent_id"`         // 父文件夹ID，0 为根目录
+	Name        string     `gorm:"size:512;not null" json:"name"`            // 文件/文件夹名
+	IsDir       bool       `gorm:"default:false" json:"is_dir"`              // 是否为文件夹
+	Size        int64      `gorm:"default:0" json:"size"`                    // 文件大小（字节）
+	MimeType    string     `gorm:"size:256" json:"mime_type"`                // MIME 类型
+	StorePath   string     `gorm:"size:1024" json:"-"`                       // 磁盘存储路径（不返回前端）
+	Hash        string     `gorm:"size:64;index" json:"hash"`                // 文件哈希（用于秒传/去重）
+	IsTrash     bool       `gorm:"default:false;index" json:"is_trash"`      // 是否在回收站
+	IsEncrypted bool       `gorm:"default:false" json:"is_encrypted"`        // 是否加密存储
+	TrashedAt   *time.Time `json:"trashed_at,omitempty"`                     // 删除时间
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // ==================== 分享链接模型 ====================
@@ -154,4 +155,96 @@ type IndexedFile struct {
 	ModTime    time.Time `json:"mod_time"`                                    // 文件修改时间
 	CreatedAt  time.Time `json:"created_at"`                                  // 首次索引时间
 	UpdatedAt  time.Time `json:"updated_at"`                                  // 最近更新时间
+}
+
+// ==================== 收藏夹模型 ====================
+
+// Favorite 用户收藏
+type Favorite struct {
+	ID        uint      `gorm:"primarykey" json:"id"`
+	UserID    uint      `gorm:"uniqueIndex:idx_user_file;not null" json:"user_id"` // 所属用户
+	FileID    uint      `gorm:"uniqueIndex:idx_user_file;not null" json:"file_id"` // 收藏的文件/文件夹ID
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ==================== 标签模型 ====================
+
+// Tag 标签
+type Tag struct {
+	ID        uint      `gorm:"primarykey" json:"id"`
+	UserID    uint      `gorm:"index;not null" json:"user_id"`        // 所属用户
+	Name      string    `gorm:"size:64;not null" json:"name"`         // 标签名称
+	Color     string    `gorm:"size:16;default:#1890ff" json:"color"` // 标签颜色
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// FileTag 文件-标签关联（多对多）
+type FileTag struct {
+	ID     uint `gorm:"primarykey" json:"id"`
+	FileID uint `gorm:"uniqueIndex:idx_file_tag;not null" json:"file_id"` // 文件ID
+	TagID  uint `gorm:"uniqueIndex:idx_file_tag;not null" json:"tag_id"`  // 标签ID
+}
+
+// ==================== 通知模型 ====================
+
+// Notification 用户通知
+type Notification struct {
+	ID        uint      `gorm:"primarykey" json:"id"`
+	UserID    uint      `gorm:"index;not null" json:"user_id"`      // 接收者
+	Type      string    `gorm:"size:32;not null;index" json:"type"` // 通知类型: share_viewed / storage_warning / scan_complete / system
+	Title     string    `gorm:"size:256;not null" json:"title"`     // 通知标题
+	Content   string    `gorm:"size:1024" json:"content"`           // 通知内容
+	IsRead    bool      `gorm:"default:false;index" json:"is_read"` // 是否已读
+	RelatedID uint      `gorm:"default:0" json:"related_id"`        // 关联资源ID
+	CreatedAt time.Time `gorm:"index" json:"created_at"`
+}
+
+// ==================== 定时同步调度模型 ====================
+
+// ==================== 协作空间模型 ====================
+
+// Workspace 协作空间（团队文件管理）
+type Workspace struct {
+	ID          uint      `gorm:"primarykey" json:"id"`
+	OwnerID     uint      `gorm:"index;not null" json:"owner_id"` // 创建者/拥有者
+	Name        string    `gorm:"size:128;not null" json:"name"`  // 空间名称
+	Description string    `gorm:"size:512" json:"description"`    // 空间描述
+	Icon        string    `gorm:"size:32;default:📁" json:"icon"`  // 图标 emoji
+	RootFolder  uint      `gorm:"default:0" json:"root_folder"`   // 关联的根文件夹ID
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// WorkspaceMember 空间成员
+type WorkspaceMember struct {
+	ID          uint      `gorm:"primarykey" json:"id"`
+	WorkspaceID uint      `gorm:"uniqueIndex:idx_ws_user;not null" json:"workspace_id"` // 空间ID
+	UserID      uint      `gorm:"uniqueIndex:idx_ws_user;not null" json:"user_id"`      // 用户ID
+	Role        string    `gorm:"size:32;default:viewer" json:"role"`                   // 角色: owner / editor / viewer
+	JoinedAt    time.Time `json:"joined_at"`
+}
+
+// FolderPermission 文件夹级别权限
+type FolderPermission struct {
+	ID         uint      `gorm:"primarykey" json:"id"`
+	FolderID   uint      `gorm:"uniqueIndex:idx_folder_user;not null" json:"folder_id"` // 文件夹ID
+	UserID     uint      `gorm:"uniqueIndex:idx_folder_user;not null" json:"user_id"`   // 被授权用户ID
+	GrantedBy  uint      `gorm:"not null" json:"granted_by"`                            // 授权者ID
+	Permission string    `gorm:"size:16;default:read" json:"permission"`                // read / write
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// ==================== 定时同步调度模型 ====================
+
+// SyncSchedule 数据源定时同步调度
+type SyncSchedule struct {
+	ID        uint       `gorm:"primarykey" json:"id"`
+	MountID   uint       `gorm:"uniqueIndex;not null" json:"mount_id"` // 关联的挂载点
+	UserID    uint       `gorm:"index;not null" json:"user_id"`        // 所属用户
+	CronExpr  string     `gorm:"size:64;not null" json:"cron_expr"`    // Cron 表达式，如 "0 */6 * * *" 每6小时
+	Enabled   bool       `gorm:"default:true" json:"enabled"`          // 是否启用
+	LastRun   *time.Time `json:"last_run,omitempty"`                   // 上次执行时间
+	NextRun   *time.Time `json:"next_run,omitempty"`                   // 下次执行时间
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }

@@ -7,6 +7,7 @@ import (
 	"nowen-file/middleware"
 	"nowen-file/model"
 	"nowen-file/router"
+	"nowen-file/service"
 	"nowen-file/storage"
 	"os"
 )
@@ -46,9 +47,14 @@ func main() {
 		log.Printf("📁 使用本地存储后端: %s", cfg.UploadDir)
 	}
 
+	// 初始化定时同步调度器
+	scheduler := service.NewCronScheduler()
+	scheduler.Start()
+	defer scheduler.Stop()
+
 	// 初始化路由
 	auth := middleware.NewAuthMiddleware(cfg.JWTSecret)
-	r := router.Setup(cfg, auth, store)
+	r := router.Setup(cfg, auth, store, scheduler)
 
 	// 启动服务器
 	addr := fmt.Sprintf(":%d", cfg.Port)

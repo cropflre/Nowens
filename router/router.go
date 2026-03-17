@@ -4,13 +4,14 @@ import (
 	"nowen-file/config"
 	"nowen-file/handler"
 	"nowen-file/middleware"
+	"nowen-file/service"
 	"nowen-file/storage"
 
 	"github.com/gin-gonic/gin"
 )
 
 // Setup 初始化路由
-func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.Storage) *gin.Engine {
+func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.Storage, scheduler *service.CronScheduler) *gin.Engine {
 	r := gin.Default()
 
 	// 全局中间件
@@ -27,6 +28,14 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 	adminHandler := handler.NewAdminHandler()
 	webdavHandler := handler.NewWebDAVHandler(fileHandler.GetFileService())
 	mountHandler := handler.NewMountHandler()
+	favoriteHandler := handler.NewFavoriteHandler()
+	tagHandler := handler.NewTagHandler()
+	notificationHandler := handler.NewNotificationHandler()
+	dashboardHandler := handler.NewDashboardHandler(fileHandler.GetFileService())
+	syncScheduleHandler := handler.NewSyncScheduleHandler(scheduler)
+	encryptionHandler := handler.NewEncryptionHandler(fileHandler.GetFileService())
+	workspaceHandler := handler.NewWorkspaceHandler()
+	agentHandler := handler.NewAgentHandler()
 
 	// ==================== WebDAV 接口 ====================
 	// 支持所有 WebDAV 方法
@@ -69,22 +78,30 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 		// 文件管理接口
 		fileGroup := authorized.Group("/files")
 		{
-			fileGroup.GET("/list", fileHandler.ListFiles)                 // 文件列表
-			fileGroup.POST("/folder", fileHandler.CreateFolder)           // 创建文件夹
-			fileGroup.POST("/upload", fileHandler.Upload)                 // 上传文件
-			fileGroup.GET("/download/:uuid", fileHandler.Download)        // 下载文件
-			fileGroup.GET("/preview/:uuid", fileHandler.Preview)          // 预览文件内容
-			fileGroup.GET("/preview-info/:uuid", fileHandler.PreviewInfo) // 预览元信息
-			fileGroup.GET("/thumb/:uuid", fileHandler.Thumbnail)          // 缩略图
-			fileGroup.PUT("/rename", fileHandler.Rename)                  // 重命名
-			fileGroup.PUT("/move", fileHandler.Move)                      // 移动
-			fileGroup.POST("/trash", fileHandler.Trash)                   // 移入回收站
-			fileGroup.POST("/restore", fileHandler.Restore)               // 从回收站恢复
-			fileGroup.GET("/trash", fileHandler.ListTrash)                // 回收站列表
-			fileGroup.DELETE("/:id", fileHandler.Delete)                  // 永久删除
-			fileGroup.GET("/search", fileHandler.Search)                  // 搜索
-			fileGroup.GET("/type/:type", fileHandler.SearchByType)        // 按类型搜索
-			fileGroup.GET("/storage", fileHandler.StorageStats)           // 存储统计
+			fileGroup.GET("/list", fileHandler.ListFiles)                     // 文件列表
+			fileGroup.POST("/folder", fileHandler.CreateFolder)               // 创建文件夹
+			fileGroup.POST("/upload", fileHandler.Upload)                     // 上传文件
+			fileGroup.GET("/download/:uuid", fileHandler.Download)            // 下载文件
+			fileGroup.GET("/preview/:uuid", fileHandler.Preview)              // 预览文件内容
+			fileGroup.GET("/preview-info/:uuid", fileHandler.PreviewInfo)     // 预览元信息
+			fileGroup.GET("/thumb/:uuid", fileHandler.Thumbnail)              // 缩略图
+			fileGroup.PUT("/rename", fileHandler.Rename)                      // 重命名
+			fileGroup.PUT("/move", fileHandler.Move)                          // 移动
+			fileGroup.POST("/trash", fileHandler.Trash)                       // 移入回收站
+			fileGroup.POST("/restore", fileHandler.Restore)                   // 从回收站恢复
+			fileGroup.GET("/trash", fileHandler.ListTrash)                    // 回收站列表
+			fileGroup.DELETE("/:id", fileHandler.Delete)                      // 永久删除
+			fileGroup.GET("/search", fileHandler.Search)                      // 搜索
+			fileGroup.GET("/type/:type", fileHandler.SearchByType)            // 按类型搜索
+			fileGroup.GET("/storage", fileHandler.StorageStats)               // 存储统计
+			fileGroup.POST("/instant-upload", fileHandler.CheckInstantUpload) // 秒传检查
+			fileGroup.GET("/content/:uuid", fileHandler.GetTextContent)       // 获取文本内容
+			fileGroup.PUT("/content/:uuid", fileHandler.SaveTextContent)      // 保存文本内容
+
+			// 文件加密
+			fileGroup.POST("/encrypt", encryptionHandler.EncryptFile)                // 加密文件
+			fileGroup.POST("/decrypt", encryptionHandler.DecryptFile)                // 解密文件
+			fileGroup.POST("/decrypt-download", encryptionHandler.DownloadDecrypted) // 临时解密下载
 
 			// 批量操作
 			fileGroup.POST("/batch/trash", fileHandler.BatchTrash)   // 批量移入回收站
@@ -105,6 +122,52 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 			shareGroup.DELETE("/:id", shareHandler.DeleteShare) // 删除分享
 		}
 
+		// 收藏夹接口
+		favGroup := authorized.Group("/favorites")
+		{
+			favGroup.POST("", favoriteHandler.AddFavorite)                 // 添加收藏
+			favGroup.GET("", favoriteHandler.ListFavorites)                // 收藏列表
+			favGroup.DELETE("/:file_id", favoriteHandler.RemoveFavorite)   // 取消收藏
+			favGroup.GET("/check/:file_id", favoriteHandler.CheckFavorite) // 检查是否收藏
+		}
+
+		// 标签接口
+		tagGroup := authorized.Group("/tags")
+		{
+			tagGroup.POST("", tagHandler.CreateTag)                         // 创建标签
+			tagGroup.GET("", tagHandler.ListTags)                           // 标签列表
+			tagGroup.PUT("/:id", tagHandler.UpdateTag)                      // 更新标签
+			tagGroup.DELETE("/:id", tagHandler.DeleteTag)                   // 删除标签
+			tagGroup.GET("/:id/files", tagHandler.GetFilesByTag)            // 按标签获取文件
+			tagGroup.POST("/file", tagHandler.TagFile)                      // 给文件打标签
+			tagGroup.DELETE("/file/:file_id/:tag_id", tagHandler.UntagFile) // 取消文件标签
+			tagGroup.GET("/file/:file_id", tagHandler.GetFileTags)          // 获取文件标签
+		}
+
+		// 通知接口
+		notifyGroup := authorized.Group("/notifications")
+		{
+			notifyGroup.GET("", notificationHandler.ListNotifications)           // 通知列表
+			notifyGroup.GET("/unread-count", notificationHandler.GetUnreadCount) // 未读数量
+			notifyGroup.PUT("/:id/read", notificationHandler.MarkAsRead)         // 标记已读
+			notifyGroup.PUT("/read-all", notificationHandler.MarkAllAsRead)      // 全部已读
+			notifyGroup.DELETE("/:id", notificationHandler.DeleteNotification)   // 删除通知
+			notifyGroup.DELETE("/clear", notificationHandler.ClearAll)           // 清空通知
+		}
+
+		// 个人仪表盘
+		authorized.GET("/dashboard", dashboardHandler.GetDashboard)
+
+		// 定时同步调度接口
+		syncGroup := authorized.Group("/sync-schedules")
+		{
+			syncGroup.POST("", syncScheduleHandler.CreateSchedule)                    // 创建定时任务
+			syncGroup.GET("", syncScheduleHandler.ListSchedules)                      // 任务列表
+			syncGroup.PUT("/:id", syncScheduleHandler.UpdateSchedule)                 // 更新任务
+			syncGroup.DELETE("/:id", syncScheduleHandler.DeleteSchedule)              // 删除任务
+			syncGroup.GET("/mount/:mount_id", syncScheduleHandler.GetScheduleByMount) // 按数据源查询
+		}
+
 		// 数据源/挂载点管理接口
 		mountGroup := authorized.Group("/mounts")
 		{
@@ -119,6 +182,34 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 			mountGroup.GET("/search", mountHandler.SearchIndexedFiles)                   // 搜索索引文件
 			mountGroup.GET("/files/:file_id/download", mountHandler.DownloadIndexedFile) // 下载索引文件
 			mountGroup.GET("/files/:file_id/preview", mountHandler.PreviewIndexedFile)   // 预览索引文件
+		}
+
+		// 协作空间接口
+		wsGroup := authorized.Group("/workspaces")
+		{
+			wsGroup.POST("", workspaceHandler.CreateWorkspace)                                                // 创建空间
+			wsGroup.GET("", workspaceHandler.ListWorkspaces)                                                  // 空间列表
+			wsGroup.GET("/:id", workspaceHandler.GetWorkspace)                                                // 空间详情
+			wsGroup.PUT("/:id", workspaceHandler.UpdateWorkspace)                                             // 更新空间
+			wsGroup.DELETE("/:id", workspaceHandler.DeleteWorkspace)                                          // 删除空间
+			wsGroup.POST("/:id/members", workspaceHandler.AddMember)                                          // 添加成员
+			wsGroup.GET("/:id/members", workspaceHandler.ListMembers)                                         // 成员列表
+			wsGroup.PUT("/:id/members/:user_id", workspaceHandler.UpdateMemberRole)                           // 更新角色
+			wsGroup.DELETE("/:id/members/:user_id", workspaceHandler.RemoveMember)                            // 移除成员
+			wsGroup.POST("/folder-permission", workspaceHandler.SetFolderPermission)                          // 设置文件夹权限
+			wsGroup.GET("/folder-permission/:folder_id", workspaceHandler.ListFolderPermissions)              // 查看文件夹权限
+			wsGroup.DELETE("/folder-permission/:folder_id/:user_id", workspaceHandler.RemoveFolderPermission) // 移除权限
+			wsGroup.GET("/search-users", workspaceHandler.SearchUsers)                                        // 搜索用户
+		}
+
+		// 远程 Agent 接口
+		agentGroup := authorized.Group("/agents")
+		{
+			agentGroup.POST("/register", agentHandler.RegisterAgent)              // 注册 Agent
+			agentGroup.POST("/ping", agentHandler.PingAgent)                      // 检测 Agent
+			agentGroup.GET("/:mount_id/files", agentHandler.ListAgentFiles)       // 浏览 Agent 文件
+			agentGroup.GET("/:mount_id/download", agentHandler.DownloadAgentFile) // 下载 Agent 文件
+			agentGroup.POST("/:mount_id/sync", agentHandler.SyncAgentFiles)       // 同步 Agent 索引
 		}
 	}
 

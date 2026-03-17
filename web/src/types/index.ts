@@ -23,6 +23,7 @@ export interface FileItem {
   mime_type: string
   hash: string
   is_trash: boolean
+  is_encrypted: boolean
   trashed_at?: string
   created_at: string
   updated_at: string
@@ -186,4 +187,131 @@ export interface CreateMountRequest {
   agent_addr?: string
   smb_user?: string
   smb_pass?: string
+}
+
+// ==================== 收藏夹相关类型 ====================
+
+export interface FavoriteItem {
+  id: number
+  file_id: number
+  file: FileItem
+  created_at: string
+}
+
+// ==================== 标签相关类型 ====================
+
+export interface Tag {
+  id: number
+  name: string
+  color: string
+  file_count?: number
+  created_at: string
+}
+
+export interface FileTag {
+  id: number
+  file_id: number
+  tag_id: number
+}
+
+// ==================== 通知相关类型 ====================
+
+export interface Notification {
+  id: number
+  user_id: number
+  type: 'share_viewed' | 'storage_warning' | 'scan_complete' | 'system'
+  title: string
+  content: string
+  is_read: boolean
+  related_id: number
+  created_at: string
+}
+
+// ==================== 定时同步调度类型 ====================
+
+export interface SyncSchedule {
+  id: number
+  mount_id: number
+  user_id: number
+  cron_expr: string
+  enabled: boolean
+  last_run?: string
+  next_run?: string
+  created_at: string
+  updated_at: string
+}
+
+// ==================== 仪表盘类型 ====================
+
+export interface DashboardStats {
+  file_count: number
+  folder_count: number
+  trash_count: number
+  share_count: number
+  favorite_count: number
+  storage_used: number
+  storage_limit: number
+  recent_files: FileItem[]
+  type_distribution: Array<{
+    category: string
+    total: number
+    count: number
+  }>
+  upload_trend: Array<{
+    date: string
+    count: number
+    size: number
+  }>
+}
+
+// ==================== 协作空间类型 ====================
+
+export interface Workspace {
+  id: number
+  owner_id: number
+  name: string
+  description: string
+  icon: string
+  root_folder: number
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkspaceMember {
+  id: number
+  workspace_id: number
+  user_id: number
+  role: 'owner' | 'editor' | 'viewer'
+  joined_at: string
+}
+
+export interface FolderPermission {
+  id: number
+  folder_id: number
+  user_id: number
+  granted_by: number
+  permission: 'read' | 'write'
+  created_at: string
+}
+
+// ==================== 远程 Agent 类型 ====================
+
+export interface AgentStatus {
+  agent_id: string
+  version: string
+  hostname: string
+  os: string
+  arch: string
+  uptime: number
+  disk_free: number
+  disk_total: number
+  file_count: number
+}
+
+export interface AgentFileInfo {
+  name: string
+  path: string
+  is_dir: boolean
+  size: number
+  mod_time: string
 }

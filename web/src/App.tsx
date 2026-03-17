@@ -11,6 +11,11 @@ import ShareView from '@/views/ShareView'
 import Admin from '@/views/Admin'
 import Mounts from '@/views/Mounts'
 import MountBrowse from '@/views/MountBrowse'
+import Favorites from '@/views/Favorites'
+import Tags from '@/views/Tags'
+import Dashboard from '@/views/Dashboard'
+import FileEditor from '@/views/FileEditor'
+import Workspaces from '@/views/Workspaces'
 
 // 路由守卫组件
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -40,13 +45,18 @@ export default function App() {
           </RequireAuth>
         }
       >
-        <Route index element={<Navigate to="/files" replace />} />
+        <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route path="dashboard" element={<Dashboard />} />
         <Route path="files" element={<Files />} />
         <Route path="category/:type" element={<Category />} />
         <Route path="trash" element={<Trash />} />
         <Route path="shares" element={<MyShares />} />
+        <Route path="favorites" element={<Favorites />} />
+        <Route path="tags" element={<Tags />} />
+        <Route path="workspaces" element={<Workspaces />} />
         <Route path="mounts" element={<Mounts />} />
         <Route path="mounts/:id/browse" element={<MountBrowse />} />
+        <Route path="editor" element={<FileEditor />} />
         <Route path="admin" element={<Admin />} />
       </Route>
     </Routes>

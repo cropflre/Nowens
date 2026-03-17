@@ -11,13 +11,15 @@ import (
 
 // MountHandler 挂载点/数据源管理接口
 type MountHandler struct {
-	mountService *service.MountService
+	mountService        *service.MountService
+	notificationService *service.NotificationService
 }
 
 // NewMountHandler 创建 MountHandler
 func NewMountHandler() *MountHandler {
 	return &MountHandler{
-		mountService: service.NewMountService(),
+		mountService:        service.NewMountService(),
+		notificationService: service.NewNotificationService(),
 	}
 }
 
@@ -168,6 +170,19 @@ func (h *MountHandler) ScanMount(c *gin.Context) {
 	go func() {
 		if err := h.mountService.ScanMount(userID, uint(mountID)); err != nil {
 			fmt.Printf("扫描数据源 %d 失败: %v\n", mountID, err)
+			h.notificationService.CreateNotification(
+				userID, service.NotifyScanComplete,
+				"数据源扫描失败",
+				fmt.Sprintf("数据源扫描失败: %v", err),
+				uint(mountID),
+			)
+		} else {
+			h.notificationService.CreateNotification(
+				userID, service.NotifyScanComplete,
+				"数据源扫描完成",
+				"数据源扫描已完成，文件索引已更新",
+				uint(mountID),
+			)
 		}
 	}()
 

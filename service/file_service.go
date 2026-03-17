@@ -121,15 +121,26 @@ func (s *FileService) UploadFile(userID uint, parentID uint, header *multipart.F
 	// 重置文件指针
 	src.Seek(0, 0)
 
-	// 生成存储路径: {userID}/{date}/{uuid}{ext}
-	fileUUID := uuid.New().String()
-	ext := filepath.Ext(header.Filename)
-	dateDir := time.Now().Format("2006/01/02")
-	relPath := filepath.Join(fmt.Sprintf("%d", userID), dateDir, fileUUID+ext)
+	// ===== 秒传/去重：检查是否存在相同哈希的文件 =====
+	var existingFile model.FileItem
+	instantUpload := false
+	var relPath string
 
-	// 使用存储后端保存文件
-	if err := s.storage.Put(relPath, src, header.Size); err != nil {
-		return nil, errors.New("保存文件失败: " + err.Error())
+	if err := model.DB.Where("hash = ? AND user_id = ? AND is_trash = ?", fileHash, userID, false).
+		First(&existingFile).Error; err == nil {
+		// 找到相同哈希的文件，复用存储路径（秒传）
+		relPath = existingFile.StorePath
+		instantUpload = true
+	} else {
+		// 没找到，正常上传
+		fileUUID := uuid.New().String()
+		ext := filepath.Ext(header.Filename)
+		dateDir := time.Now().Format("2006/01/02")
+		relPath = filepath.Join(fmt.Sprintf("%d", userID), dateDir, fileUUID+ext)
+
+		if err := s.storage.Put(relPath, src, header.Size); err != nil {
+			return nil, errors.New("保存文件失败: " + err.Error())
+		}
 	}
 
 	// 检测 MIME 类型
@@ -142,8 +153,9 @@ func (s *FileService) UploadFile(userID uint, parentID uint, header *multipart.F
 	fileName := s.getUniqueFileName(userID, parentID, header.Filename)
 
 	// 创建文件记录
+	newUUID := uuid.New().String()
 	fileItem := &model.FileItem{
-		UUID:      fileUUID,
+		UUID:      newUUID,
 		UserID:    userID,
 		ParentID:  parentID,
 		Name:      fileName,
@@ -155,13 +167,17 @@ func (s *FileService) UploadFile(userID uint, parentID uint, header *multipart.F
 	}
 
 	if err := model.DB.Create(fileItem).Error; err != nil {
-		s.storage.Delete(relPath)
+		if !instantUpload {
+			s.storage.Delete(relPath)
+		}
 		return nil, errors.New("保存文件记录失败")
 	}
 
-	// 更新用户存储使用量
-	model.DB.Model(&model.User{}).Where("id = ?", userID).
-		Update("storage_used", gorm.Expr("storage_used + ?", header.Size))
+	// 秒传不计入存储使用量（因为复用了同一份物理文件）
+	if !instantUpload {
+		model.DB.Model(&model.User{}).Where("id = ?", userID).
+			Update("storage_used", gorm.Expr("storage_used + ?", header.Size))
+	}
 
 	// 异步生成缩略图（图片类型）
 	if isImageMime(mimeType) {
@@ -169,6 +185,37 @@ func (s *FileService) UploadFile(userID uint, parentID uint, header *multipart.F
 	}
 
 	return fileItem, nil
+}
+
+// CheckInstantUpload 检查文件是否可以秒传（根据哈希判断）
+func (s *FileService) CheckInstantUpload(userID uint, parentID uint, hash string, fileName string, size int64, mimeType string) (*model.FileItem, bool) {
+	var existingFile model.FileItem
+	if err := model.DB.Where("hash = ? AND user_id = ? AND is_trash = ?", hash, userID, false).
+		First(&existingFile).Error; err != nil {
+		return nil, false
+	}
+
+	// 找到相同文件，直接创建引用记录
+	newUUID := uuid.New().String()
+	uniqueName := s.getUniqueFileName(userID, parentID, fileName)
+
+	fileItem := &model.FileItem{
+		UUID:      newUUID,
+		UserID:    userID,
+		ParentID:  parentID,
+		Name:      uniqueName,
+		IsDir:     false,
+		Size:      size,
+		MimeType:  mimeType,
+		StorePath: existingFile.StorePath,
+		Hash:      hash,
+	}
+
+	if err := model.DB.Create(fileItem).Error; err != nil {
+		return nil, false
+	}
+
+	return fileItem, true
 }
 
 // getUniqueFileName 获取不重名的文件名
@@ -245,6 +292,11 @@ func (s *FileService) GetFilePath(file *model.FileItem) string {
 }
 
 // GetFileReader 获取文件内容的 Reader（支持所有存储后端）
+// GetStorage 获取存储引擎（供其他服务使用）
+func (s *FileService) GetStorage() storage.Storage {
+	return s.storage
+}
+
 func (s *FileService) GetFileReader(file *model.FileItem) (io.ReadCloser, error) {
 	return s.storage.Get(file.StorePath)
 }
@@ -622,4 +674,190 @@ func (s *FileService) GetFileByID(userID uint, fileID uint) (*model.FileItem, er
 		return nil, errors.New("文件不存在")
 	}
 	return &file, nil
+}
+
+// ==================== 在线编辑 ====================
+
+// SaveTextContent 保存文本文件内容（自动创建版本历史）
+func (s *FileService) SaveTextContent(userID uint, file *model.FileItem, content []byte) (*model.FileItem, error) {
+	// 先保存当前版本为历史版本
+	var maxVersion int
+	model.DB.Model(&model.FileVersion{}).Where("file_id = ?", file.ID).
+		Select("COALESCE(MAX(version), 0)").Scan(&maxVersion)
+
+	version := &model.FileVersion{
+		FileID:    file.ID,
+		UserID:    userID,
+		Version:   maxVersion + 1,
+		Size:      file.Size,
+		StorePath: file.StorePath,
+		Hash:      file.Hash,
+		Comment:   "在线编辑前自动保存",
+	}
+	model.DB.Create(version)
+
+	// 计算新哈希
+	hasher := sha256.New()
+	hasher.Write(content)
+	newHash := fmt.Sprintf("%x", hasher.Sum(nil))
+
+	// 生成新的存储路径
+	newUUID := uuid.New().String()
+	ext := filepath.Ext(file.Name)
+	dateDir := time.Now().Format("2006/01/02")
+	newRelPath := filepath.Join(fmt.Sprintf("%d", userID), dateDir, newUUID+ext)
+
+	// 使用 strings.NewReader 包装内容
+	reader := strings.NewReader(string(content))
+	if err := s.storage.Put(newRelPath, reader, int64(len(content))); err != nil {
+		return nil, errors.New("保存文件失败: " + err.Error())
+	}
+
+	// 更新文件记录
+	oldSize := file.Size
+	newSize := int64(len(content))
+
+	model.DB.Model(file).Updates(map[string]interface{}{
+		"store_path": newRelPath,
+		"hash":       newHash,
+		"size":       newSize,
+	})
+
+	// 更新用户存储使用量差值
+	diff := newSize - oldSize
+	if diff != 0 {
+		model.DB.Model(&model.User{}).Where("id = ?", userID).
+			Update("storage_used", gorm.Expr("storage_used + ?", diff))
+	}
+
+	// 重新查询返回最新文件信息
+	var updated model.FileItem
+	model.DB.First(&updated, file.ID)
+	return &updated, nil
+}
+
+// ==================== 个人仪表盘统计 ====================
+
+// GetDashboardStats 获取用户仪表盘数据
+func (s *FileService) GetDashboardStats(userID uint) (map[string]interface{}, error) {
+	// 基础统计
+	var fileCount, folderCount, trashCount, shareCount, favoriteCount int64
+	model.DB.Model(&model.FileItem{}).Where("user_id = ? AND is_dir = ? AND is_trash = ?", userID, false, false).Count(&fileCount)
+	model.DB.Model(&model.FileItem{}).Where("user_id = ? AND is_dir = ? AND is_trash = ?", userID, true, false).Count(&folderCount)
+	model.DB.Model(&model.FileItem{}).Where("user_id = ? AND is_trash = ?", userID, true).Count(&trashCount)
+	model.DB.Model(&model.ShareLink{}).Where("user_id = ?", userID).Count(&shareCount)
+	model.DB.Model(&model.Favorite{}).Where("user_id = ?", userID).Count(&favoriteCount)
+
+	// 用户信息
+	var user model.User
+	model.DB.First(&user, userID)
+
+	// 最近文件（最近 10 个更新的文件）
+	var recentFiles []model.FileItem
+	model.DB.Where("user_id = ? AND is_dir = ? AND is_trash = ?", userID, false, false).
+		Order("updated_at DESC").Limit(10).Find(&recentFiles)
+
+	// 按类型统计文件大小分布
+	type TypeStat struct {
+		Category string `json:"category"`
+		Total    int64  `json:"total"`
+		Count    int64  `json:"count"`
+	}
+
+	var imageTotal, videoTotal, audioTotal, docTotal, otherTotal int64
+	var imageCount, videoCount, audioCount, docCount, otherCount int64
+
+	model.DB.Model(&model.FileItem{}).
+		Where("user_id = ? AND is_dir = ? AND is_trash = ? AND mime_type LIKE ?", userID, false, false, "image/%").
+		Select("COALESCE(SUM(size), 0)").Scan(&imageTotal)
+	model.DB.Model(&model.FileItem{}).
+		Where("user_id = ? AND is_dir = ? AND is_trash = ? AND mime_type LIKE ?", userID, false, false, "image/%").
+		Count(&imageCount)
+
+	model.DB.Model(&model.FileItem{}).
+		Where("user_id = ? AND is_dir = ? AND is_trash = ? AND mime_type LIKE ?", userID, false, false, "video/%").
+		Select("COALESCE(SUM(size), 0)").Scan(&videoTotal)
+	model.DB.Model(&model.FileItem{}).
+		Where("user_id = ? AND is_dir = ? AND is_trash = ? AND mime_type LIKE ?", userID, false, false, "video/%").
+		Count(&videoCount)
+
+	model.DB.Model(&model.FileItem{}).
+		Where("user_id = ? AND is_dir = ? AND is_trash = ? AND mime_type LIKE ?", userID, false, false, "audio/%").
+		Select("COALESCE(SUM(size), 0)").Scan(&audioTotal)
+	model.DB.Model(&model.FileItem{}).
+		Where("user_id = ? AND is_dir = ? AND is_trash = ? AND mime_type LIKE ?", userID, false, false, "audio/%").
+		Count(&audioCount)
+
+	model.DB.Model(&model.FileItem{}).
+		Where("user_id = ? AND is_dir = ? AND is_trash = ? AND (mime_type LIKE ? OR mime_type IN ?)",
+			userID, false, false, "text/%", []string{
+				"application/pdf", "application/msword",
+				"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+			}).
+		Select("COALESCE(SUM(size), 0)").Scan(&docTotal)
+	model.DB.Model(&model.FileItem{}).
+		Where("user_id = ? AND is_dir = ? AND is_trash = ? AND (mime_type LIKE ? OR mime_type IN ?)",
+			userID, false, false, "text/%", []string{
+				"application/pdf", "application/msword",
+				"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+			}).
+		Count(&docCount)
+
+	otherTotal = user.StorageUsed - imageTotal - videoTotal - audioTotal - docTotal
+	otherCount = fileCount - imageCount - videoCount - audioCount - docCount
+	if otherTotal < 0 {
+		otherTotal = 0
+	}
+	if otherCount < 0 {
+		otherCount = 0
+	}
+
+	typeDistribution := []TypeStat{
+		{Category: "图片", Total: imageTotal, Count: imageCount},
+		{Category: "视频", Total: videoTotal, Count: videoCount},
+		{Category: "音频", Total: audioTotal, Count: audioCount},
+		{Category: "文档", Total: docTotal, Count: docCount},
+		{Category: "其他", Total: otherTotal, Count: otherCount},
+	}
+
+	// 最近 7 天上传趋势
+	type DayStat struct {
+		Date  string `json:"date"`
+		Count int64  `json:"count"`
+		Size  int64  `json:"size"`
+	}
+	var uploadTrend []DayStat
+	for i := 6; i >= 0; i-- {
+		day := time.Now().AddDate(0, 0, -i)
+		dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
+		dayEnd := dayStart.AddDate(0, 0, 1)
+
+		var count int64
+		var size int64
+		model.DB.Model(&model.FileItem{}).
+			Where("user_id = ? AND is_dir = ? AND created_at >= ? AND created_at < ?", userID, false, dayStart, dayEnd).
+			Count(&count)
+		model.DB.Model(&model.FileItem{}).
+			Where("user_id = ? AND is_dir = ? AND created_at >= ? AND created_at < ?", userID, false, dayStart, dayEnd).
+			Select("COALESCE(SUM(size), 0)").Scan(&size)
+
+		uploadTrend = append(uploadTrend, DayStat{
+			Date:  dayStart.Format("01-02"),
+			Count: count,
+			Size:  size,
+		})
+	}
+
+	return map[string]interface{}{
+		"file_count":        fileCount,
+		"folder_count":      folderCount,
+		"trash_count":       trashCount,
+		"share_count":       shareCount,
+		"favorite_count":    favoriteCount,
+		"storage_used":      user.StorageUsed,
+		"storage_limit":     user.StorageLimit,
+		"recent_files":      recentFiles,
+		"type_distribution": typeDistribution,
+		"upload_trend":      uploadTrend,
+	}, nil
 }

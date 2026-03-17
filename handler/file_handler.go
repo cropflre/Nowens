@@ -416,6 +416,144 @@ func (h *FileHandler) StorageStats(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": stats})
 }
 
+// CheckInstantUpload 秒传检查（根据文件哈希判断是否可以跳过上传）
+// POST /api/files/instant-upload
+func (h *FileHandler) CheckInstantUpload(c *gin.Context) {
+	userID := c.GetUint("user_id")
+
+	var req struct {
+		Hash     string `json:"hash" binding:"required"`
+		ParentID uint   `json:"parent_id"`
+		FileName string `json:"file_name" binding:"required"`
+		Size     int64  `json:"size" binding:"required"`
+		MimeType string `json:"mime_type"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "参数错误"})
+		return
+	}
+
+	if req.MimeType == "" {
+		req.MimeType = "application/octet-stream"
+	}
+
+	fileItem, ok := h.fileService.CheckInstantUpload(userID, req.ParentID, req.Hash, req.FileName, req.Size, req.MimeType)
+	if ok {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "秒传成功", "data": gin.H{"instant": true, "file": fileItem}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{"instant": false}})
+}
+
+// GetTextContent 获取文本文件内容（用于在线编辑）
+// GET /api/files/content/:uuid
+func (h *FileHandler) GetTextContent(c *gin.Context) {
+	fileUUID := c.Param("uuid")
+	userID := c.GetUint("user_id")
+
+	file, err := h.fileService.GetFileByUUID(fileUUID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "文件不存在"})
+		return
+	}
+
+	if file.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "msg": "无权访问该文件"})
+		return
+	}
+
+	// 只允许编辑文本类型文件
+	if !isEditableMime(file.MimeType) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "该文件类型不支持在线编辑"})
+		return
+	}
+
+	// 限制文件大小（5MB）
+	if file.Size > 5*1024*1024 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "文件过大，不支持在线编辑（最大 5MB）"})
+		return
+	}
+
+	reader, err := h.fileService.GetFileReader(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "读取文件失败"})
+		return
+	}
+	defer reader.Close()
+
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "读取文件内容失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{
+		"content":   string(content),
+		"file":      file,
+		"mime_type": file.MimeType,
+	}})
+}
+
+// SaveTextContent 保存文本文件内容（自动创建新版本）
+// PUT /api/files/content/:uuid
+func (h *FileHandler) SaveTextContent(c *gin.Context) {
+	fileUUID := c.Param("uuid")
+	userID := c.GetUint("user_id")
+
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "参数错误"})
+		return
+	}
+
+	file, err := h.fileService.GetFileByUUID(fileUUID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "文件不存在"})
+		return
+	}
+
+	if file.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "msg": "无权操作该文件"})
+		return
+	}
+
+	if !isEditableMime(file.MimeType) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "该文件类型不支持在线编辑"})
+		return
+	}
+
+	updatedFile, err := h.fileService.SaveTextContent(userID, file, []byte(req.Content))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "保存成功", "data": updatedFile})
+}
+
+// isEditableMime 判断文件是否可编辑
+func isEditableMime(mimeType string) bool {
+	editableMimes := []string{
+		"text/plain", "text/markdown", "text/html", "text/css",
+		"text/javascript", "text/xml", "text/csv",
+		"application/json", "application/xml",
+		"application/javascript", "application/x-yaml",
+	}
+	for _, m := range editableMimes {
+		if mimeType == m {
+			return true
+		}
+	}
+	// 也匹配 text/* 类型
+	if len(mimeType) > 5 && mimeType[:5] == "text/" {
+		return true
+	}
+	return false
+}
+
 // ==================== 批量操作 ====================
 
 // BatchTrash 批量移入回收站

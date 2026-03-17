@@ -1,17 +1,19 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Layout as AntLayout, Menu, Input, Dropdown, Avatar, Progress, Button } from 'antd'
+import { Layout as AntLayout, Menu, Input, Dropdown, Avatar, Progress, Button, Drawer } from 'antd'
 import {
   FolderOpenOutlined, DeleteOutlined, SearchOutlined,
   UserOutlined, LogoutOutlined, AppstoreOutlined,
   PictureOutlined, VideoCameraOutlined, AudioOutlined,
   FileTextOutlined, ShareAltOutlined, SettingOutlined,
   ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
-  DownOutlined,
+  DownOutlined, StarOutlined, TagsOutlined, DashboardOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
 import { useUserStore } from '@/stores/user'
 import { useFileStore } from '@/stores/file'
 import { formatFileSize } from '@/utils'
+import NotificationBell from '@/components/NotificationBell'
 import type { MenuProps } from 'antd'
 
 const { Sider, Header, Content } = AntLayout
@@ -23,6 +25,20 @@ export default function Layout() {
   const { goHome } = useFileStore()
   const [collapsed, setCollapsed] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768)
+  const [drawerVisible, setDrawerVisible] = useState(false)
+
+  // 响应式检测
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth <= 768
+      setIsMobile(mobile)
+      if (mobile) setCollapsed(true)
+    }
+    window.addEventListener('resize', handleResize)
+    handleResize()
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   const storagePercent = (() => {
     const used = user?.storage_used || 0
@@ -31,6 +47,11 @@ export default function Layout() {
   })()
 
   const menuItems: MenuProps['items'] = [
+    {
+      key: '/dashboard',
+      icon: <DashboardOutlined />,
+      label: '仪表盘',
+    },
     {
       key: '/files',
       icon: <FolderOpenOutlined />,
@@ -46,6 +67,21 @@ export default function Layout() {
         { key: '/category/audio', icon: <AudioOutlined />, label: '音频' },
         { key: '/category/document', icon: <FileTextOutlined />, label: '文档' },
       ],
+    },
+    {
+      key: '/favorites',
+      icon: <StarOutlined />,
+      label: '我的收藏',
+    },
+    {
+      key: '/tags',
+      icon: <TagsOutlined />,
+      label: '标签管理',
+    },
+    {
+      key: '/workspaces',
+      icon: <TeamOutlined />,
+      label: '协作空间',
     },
     {
       key: '/shares',
@@ -75,6 +111,8 @@ export default function Layout() {
 
   const handleMenuClick = (info: { key: string }) => {
     navigate(info.key)
+    // 移动端点击菜单后自动关闭侧边栏
+    if (isMobile) setDrawerVisible(false)
   }
 
   const handleSearch = () => {
@@ -94,6 +132,52 @@ export default function Layout() {
 
   return (
     <AntLayout style={{ height: '100vh' }}>
+      {/* 移动端侧边栏用 Drawer 抽屉模式 */}
+      {isMobile ? (
+        <Drawer
+          placement="left"
+          open={drawerVisible}
+          onClose={() => setDrawerVisible(false)}
+          width={220}
+          styles={{ body: { padding: 0, background: '#1e1e2d' } }}
+          closable={false}
+        >
+          <div
+            onClick={() => { goHome(); navigate('/files'); setDrawerVisible(false) }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '20px 18px', cursor: 'pointer',
+            }}
+          >
+            <FolderOpenOutlined style={{ fontSize: 28, color: '#1890ff' }} />
+            <span style={{ fontSize: 18, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap' }}>
+              Nowen File
+            </span>
+          </div>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={selectedKeys}
+            items={menuItems}
+            onClick={handleMenuClick}
+            style={{ background: 'transparent', borderRight: 'none', flex: 1 }}
+          />
+          <div style={{
+            padding: 16, margin: '0 8px 8px',
+            background: 'rgba(255,255,255,0.05)', borderRadius: 8,
+          }}>
+            <Progress
+              percent={storagePercent}
+              size="small"
+              showInfo={false}
+              strokeColor={storagePercent > 90 ? '#f5222d' : '#1890ff'}
+            />
+            <div style={{ fontSize: 12, color: '#a2a3b7', marginTop: 8, textAlign: 'center' }}>
+              {formatFileSize(user?.storage_used || 0)} / {formatFileSize(user?.storage_limit || 0)}
+            </div>
+          </div>
+        </Drawer>
+      ) : (
       <Sider
         trigger={null}
         collapsible
@@ -157,6 +241,7 @@ export default function Layout() {
           {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
         </div>
       </Sider>
+      )}
 
       <AntLayout>
         {/* 顶部栏 */}
@@ -171,12 +256,17 @@ export default function Layout() {
             placeholder="搜索文件..."
             prefix={<SearchOutlined />}
             allowClear
-            style={{ width: 320 }}
+            style={{ width: isMobile ? 160 : 320 }}
             onPressEnter={handleSearch}
             onClear={() => { setSearchKeyword(''); navigate('/files') }}
           />
-          <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenu }} placement="bottomRight">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 16 }}>
+            {isMobile && (
+              <Button type="text" icon={<MenuUnfoldOutlined />} onClick={() => setDrawerVisible(true)} />
+            )}
+            <NotificationBell />
+            <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenu }} placement="bottomRight">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
               <Avatar size={32} src={user?.avatar}>
                 {user?.nickname?.charAt(0) || 'U'}
               </Avatar>
@@ -184,8 +274,9 @@ export default function Layout() {
                 {user?.nickname || user?.username}
               </span>
               <DownOutlined style={{ fontSize: 12 }} />
-            </div>
-          </Dropdown>
+              </div>
+            </Dropdown>
+          </div>
         </Header>
 
         {/* 页面内容 */}
