@@ -1,73 +1,63 @@
-import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { create } from 'zustand'
 import type { User } from '@/types'
 import { getProfile, login as loginApi, register as registerApi } from '@/api/user'
-import { ElMessage } from 'element-plus'
-import router from '@/router'
+import { message } from 'antd'
 
-export const useUserStore = defineStore('user', () => {
-  const user = ref<User | null>(null)
-  const token = ref<string>(localStorage.getItem('token') || '')
-  const isLoggedIn = ref(!!token.value)
+interface UserState {
+  user: User | null
+  token: string
+  isLoggedIn: boolean
+  login: (username: string, password: string) => Promise<boolean>
+  register: (username: string, password: string, nickname?: string) => Promise<boolean>
+  fetchProfile: () => Promise<void>
+  logout: () => void
+}
 
-  // 登录
-  async function login(username: string, password: string) {
+export const useUserStore = create<UserState>((set, get) => ({
+  user: null,
+  token: localStorage.getItem('token') || '',
+  isLoggedIn: !!localStorage.getItem('token'),
+
+  login: async (username: string, password: string) => {
     try {
       const res = await loginApi({ username, password })
-      token.value = res.data!.token
-      user.value = res.data!.user
-      isLoggedIn.value = true
-      localStorage.setItem('token', token.value)
-      ElMessage.success('登录成功')
-      router.push('/')
+      const { token, user } = res.data!
+      set({ token, user, isLoggedIn: true })
+      localStorage.setItem('token', token)
+      message.success('登录成功')
+      return true
     } catch {
-      // 错误已在拦截器处理
+      return false
     }
-  }
+  },
 
-  // 注册
-  async function register(username: string, password: string, nickname?: string) {
+  register: async (username: string, password: string, nickname?: string) => {
     try {
       const res = await registerApi({ username, password, nickname })
-      token.value = res.data!.token
-      user.value = res.data!.user
-      isLoggedIn.value = true
-      localStorage.setItem('token', token.value)
-      ElMessage.success('注册成功')
-      router.push('/')
+      const { token, user } = res.data!
+      set({ token, user, isLoggedIn: true })
+      localStorage.setItem('token', token)
+      message.success('注册成功')
+      return true
     } catch {
-      // 错误已在拦截器处理
+      return false
     }
-  }
+  },
 
-  // 获取用户信息
-  async function fetchProfile() {
-    if (!token.value) return
+  fetchProfile: async () => {
+    const { token } = get()
+    if (!token) return
     try {
       const res = await getProfile()
-      user.value = res.data!
-      isLoggedIn.value = true
+      set({ user: res.data!, isLoggedIn: true })
     } catch {
-      logout()
+      get().logout()
     }
-  }
+  },
 
-  // 退出登录
-  function logout() {
-    token.value = ''
-    user.value = null
-    isLoggedIn.value = false
+  logout: () => {
+    set({ token: '', user: null, isLoggedIn: false })
     localStorage.removeItem('token')
-    router.push('/login')
-  }
-
-  return {
-    user,
-    token,
-    isLoggedIn,
-    login,
-    register,
-    fetchProfile,
-    logout,
-  }
-})
+    window.location.href = '/login'
+  },
+}))

@@ -1,17 +1,17 @@
-// 全局样式
+/* 全局样式 */
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
-html, body, #app {
+html, body, #root {
   height: 100%;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
     'Noto Sans', sans-serif;
 }
 
-// 滚动条美化
+/* 滚动条美化 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -26,7 +26,7 @@ html, body, #app {
   background: transparent;
 }
 
-// 文本省略
+/* 文本省略 */
 .text-ellipsis {
   overflow: hidden;
   text-overflow: ellipsis;

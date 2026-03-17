@@ -131,3 +131,59 @@ export interface PaginatedList<T> {
   total: number
   page: number
 }
+
+// ==================== 数据源/挂载点相关类型 ====================
+
+// 挂载点/数据源
+export interface MountPoint {
+  id: number
+  user_id: number
+  name: string
+  type: 'local' | 'smb' | 'nfs' | 'agent'
+  base_path: string
+  agent_id?: string
+  agent_addr?: string
+  smb_user?: string
+  status: 'online' | 'offline' | 'syncing' | 'error'
+  file_count: number
+  dir_count: number
+  total_size: number
+  last_sync: string
+  sync_msg?: string
+  created_at: string
+  updated_at: string
+}
+
+// 索引文件
+export interface IndexedFile {
+  id: number
+  mount_id: number
+  user_id: number
+  remote_path: string
+  parent_path: string
+  name: string
+  is_dir: boolean
+  size: number
+  mime_type: string
+  hash?: string
+  mod_time: string
+  created_at: string
+  updated_at: string
+}
+
+// 索引文件列表响应
+export interface IndexedFileListData {
+  files: IndexedFile[]
+  breadcrumb: Array<{ name: string; path: string }> | null
+}
+
+// 创建数据源请求
+export interface CreateMountRequest {
+  name: string
+  type: string
+  base_path: string
+  agent_id?: string
+  agent_addr?: string
+  smb_user?: string
+  smb_pass?: string
+}

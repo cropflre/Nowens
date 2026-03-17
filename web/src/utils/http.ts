@@ -1,6 +1,5 @@
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
-import router from '@/router'
+import { message } from 'antd'
 
 // 创建 axios 实例
 const http = axios.create({
@@ -25,11 +24,11 @@ http.interceptors.response.use(
   (response) => {
     const res = response.data
     if (res.code !== 0) {
-      ElMessage.error(res.msg || '请求失败')
+      message.error(res.msg || '请求失败')
       // Token 过期，跳转登录
       if (res.code === 401) {
         localStorage.removeItem('token')
-        router.push('/login')
+        window.location.href = '/login'
       }
       return Promise.reject(new Error(res.msg))
     }
@@ -38,10 +37,10 @@ http.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
-      router.push('/login')
-      ElMessage.error('登录已过期，请重新登录')
+      window.location.href = '/login'
+      message.error('登录已过期，请重新登录')
     } else {
-      ElMessage.error(error.response?.data?.msg || '网络错误')
+      message.error(error.response?.data?.msg || '网络错误')
     }
     return Promise.reject(error)
   }

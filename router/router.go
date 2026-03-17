@@ -26,6 +26,7 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 	versionHandler := handler.NewVersionHandler(store)
 	adminHandler := handler.NewAdminHandler()
 	webdavHandler := handler.NewWebDAVHandler(fileHandler.GetFileService())
+	mountHandler := handler.NewMountHandler()
 
 	// ==================== WebDAV 接口 ====================
 	// 支持所有 WebDAV 方法
@@ -102,6 +103,22 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 			shareGroup.POST("", shareHandler.CreateShare)       // 创建分享
 			shareGroup.GET("/list", shareHandler.ListShares)    // 我的分享列表
 			shareGroup.DELETE("/:id", shareHandler.DeleteShare) // 删除分享
+		}
+
+		// 数据源/挂载点管理接口
+		mountGroup := authorized.Group("/mounts")
+		{
+			mountGroup.POST("", mountHandler.CreateMount)                                // 创建数据源
+			mountGroup.GET("", mountHandler.ListMounts)                                  // 数据源列表
+			mountGroup.GET("/:id", mountHandler.GetMount)                                // 数据源详情
+			mountGroup.PUT("/:id", mountHandler.UpdateMount)                             // 更新数据源
+			mountGroup.DELETE("/:id", mountHandler.DeleteMount)                          // 删除数据源
+			mountGroup.POST("/:id/scan", mountHandler.ScanMount)                         // 触发扫描
+			mountGroup.GET("/:id/stats", mountHandler.GetMountStats)                     // 数据源统计
+			mountGroup.GET("/:id/files", mountHandler.ListIndexedFiles)                  // 浏览索引文件
+			mountGroup.GET("/search", mountHandler.SearchIndexedFiles)                   // 搜索索引文件
+			mountGroup.GET("/files/:file_id/download", mountHandler.DownloadIndexedFile) // 下载索引文件
+			mountGroup.GET("/files/:file_id/preview", mountHandler.PreviewIndexedFile)   // 预览索引文件
 		}
 	}
 

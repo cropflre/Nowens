@@ -1,78 +1,82 @@
-import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { create } from 'zustand'
 import type { FileItem } from '@/types'
 import { getFileList } from '@/api/file'
 
-export const useFileStore = defineStore('file', () => {
-  const files = ref<FileItem[]>([])
-  const breadcrumb = ref<FileItem[]>([])
-  const currentParentId = ref(0)
-  const loading = ref(false)
-  const sortBy = ref('updated_at')
-  const sortOrder = ref('desc')
-  const viewMode = ref<'grid' | 'list'>(
-    (localStorage.getItem('viewMode') as 'grid' | 'list') || 'grid'
-  )
+interface FileState {
+  files: FileItem[]
+  breadcrumb: FileItem[]
+  currentParentId: number
+  loading: boolean
+  sortBy: string
+  sortOrder: string
+  viewMode: 'grid' | 'list'
+  loadFiles: (parentId?: number) => Promise<void>
+  toggleViewMode: () => void
+  setViewMode: (mode: 'grid' | 'list') => void
+  enterFolder: (folderId: number) => void
+  goBack: () => void
+  goHome: () => void
+}
 
-  // 加载文件列表
-  async function loadFiles(parentId?: number) {
+export const useFileStore = create<FileState>((set, get) => ({
+  files: [],
+  breadcrumb: [],
+  currentParentId: 0,
+  loading: false,
+  sortBy: 'updated_at',
+  sortOrder: 'desc',
+  viewMode: (localStorage.getItem('viewMode') as 'grid' | 'list') || 'grid',
+
+  loadFiles: async (parentId?: number) => {
     if (parentId !== undefined) {
-      currentParentId.value = parentId
+      set({ currentParentId: parentId })
     }
-    loading.value = true
+    set({ loading: true })
     try {
+      const state = get()
+      const pid = parentId !== undefined ? parentId : state.currentParentId
       const res = await getFileList({
-        parent_id: currentParentId.value,
-        sort: sortBy.value,
-        order: sortOrder.value,
+        parent_id: pid,
+        sort: state.sortBy,
+        order: state.sortOrder,
       })
-      files.value = res.data!.files || []
-      breadcrumb.value = res.data!.breadcrumb || []
+      set({
+        files: res.data!.files || [],
+        breadcrumb: res.data!.breadcrumb || [],
+      })
     } catch {
       // 错误已在拦截器处理
     } finally {
-      loading.value = false
+      set({ loading: false })
     }
-  }
+  },
 
-  // 切换视图模式
-  function toggleViewMode() {
-    viewMode.value = viewMode.value === 'grid' ? 'list' : 'grid'
-    localStorage.setItem('viewMode', viewMode.value)
-  }
+  toggleViewMode: () => {
+    const newMode = get().viewMode === 'grid' ? 'list' : 'grid'
+    set({ viewMode: newMode })
+    localStorage.setItem('viewMode', newMode)
+  },
 
-  // 进入文件夹
-  function enterFolder(folderId: number) {
-    loadFiles(folderId)
-  }
+  setViewMode: (mode: 'grid' | 'list') => {
+    set({ viewMode: mode })
+    localStorage.setItem('viewMode', mode)
+  },
 
-  // 返回上级
-  function goBack() {
-    if (breadcrumb.value.length > 0) {
-      const parent = breadcrumb.value[breadcrumb.value.length - 1]
-      loadFiles(parent.parent_id)
+  enterFolder: (folderId: number) => {
+    get().loadFiles(folderId)
+  },
+
+  goBack: () => {
+    const { breadcrumb } = get()
+    if (breadcrumb.length > 0) {
+      const parent = breadcrumb[breadcrumb.length - 1]
+      get().loadFiles(parent.parent_id)
     } else {
-      loadFiles(0)
+      get().loadFiles(0)
     }
-  }
+  },
 
-  // 回到根目录
-  function goHome() {
-    loadFiles(0)
-  }
-
-  return {
-    files,
-    breadcrumb,
-    currentParentId,
-    loading,
-    sortBy,
-    sortOrder,
-    viewMode,
-    loadFiles,
-    toggleViewMode,
-    enterFolder,
-    goBack,
-    goHome,
-  }
-})
+  goHome: () => {
+    get().loadFiles(0)
+  },
+}))
