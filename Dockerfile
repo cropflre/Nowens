@@ -1,21 +1,28 @@
+# ============================================
+# Nowen-File Docker 多阶段构建
+# 支持架构: linux/amd64, linux/arm64
+# 适用平台: 绿联NAS、群晖、威联通、飞牛等
+# ============================================
+
 # 构建阶段 - 后端
-FROM golang:1.25-alpine AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS go-builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /build
-
-# 安装 CGO 依赖（SQLite 需要）
-RUN apk add --no-cache gcc musl-dev
 
 # 复制 Go 模块文件并下载依赖
 COPY go.mod go.sum ./
 RUN go mod download
 
-# 复制源代码并构建
+# 复制源代码并构建（纯 Go SQLite，无需 CGO）
 COPY . .
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o nowen-file .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o nowen-file .
 
 # 构建阶段 - 前端
-FROM node:20-alpine AS web-builder
+FROM --platform=$BUILDPLATFORM node:20-alpine AS web-builder
 
 WORKDIR /build/web
 
@@ -28,8 +35,10 @@ RUN npm run build
 # 运行阶段
 FROM alpine:3.19
 
-LABEL maintainer="Nowen <nowen@nowen-file.dev>"
-LABEL description="Nowen-File 个人/团队文件管理系统"
+LABEL maintainer="Nowen"
+LABEL org.opencontainers.image.title="Nowen-File"
+LABEL org.opencontainers.image.description="现代化个人/团队文件管理系统，支持 WebDAV、多数据源、文件分享"
+LABEL org.opencontainers.image.source="https://github.com/nowen-file/nowen-file"
 
 WORKDIR /app
 

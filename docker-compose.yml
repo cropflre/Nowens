@@ -1,17 +1,27 @@
+# ============================================
+# Nowen-File Docker Compose 配置
+# 适用平台: 绿联NAS、群晖、威联通、飞牛等
+# ============================================
+
 services:
   nowen-file:
-    build: .
-    image: nowen-file:latest
+    image: nowen/nowen-file:latest
     container_name: nowen-file
     restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
-      - nowen-data:/app/data
+      # NAS 用户建议映射到实际目录，方便管理数据
+      # 绿联NAS示例: /volume1/docker/nowen-file/data:/app/data
+      # 群晖NAS示例: /volume1/docker/nowen-file/data:/app/data
+      - ./data:/app/data
     environment:
       - NOWEN_PORT=8080
+      # ⚠️ 请务必修改为自定义密钥
       - NOWEN_JWT_SECRET=your-secret-key-change-me
       - NOWEN_STORAGE_TYPE=local
+      # 可选：设置最大上传文件大小（字节），默认 1GB
+      # - NOWEN_MAX_UPLOAD=2147483648
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/auth/login"]
       interval: 30s
@@ -19,7 +29,9 @@ services:
       retries: 3
       start_period: 10s
 
+  # ============================================
   # 可选：使用 MinIO 作为 S3 存储后端
+  # ============================================
   # minio:
   #   image: minio/minio:latest
   #   container_name: nowen-minio
@@ -28,13 +40,13 @@ services:
   #     - "9000:9000"
   #     - "9001:9001"
   #   volumes:
-  #     - minio-data:/data
+  #     - ./minio-data:/data
   #   environment:
   #     - MINIO_ROOT_USER=minioadmin
   #     - MINIO_ROOT_PASSWORD=minioadmin
   #   command: server /data --console-address ":9001"
 
-  # 使用 S3 存储时的配置：
+  # 使用 S3 存储时，修改 nowen-file 的 environment：
   # nowen-file:
   #   environment:
   #     - NOWEN_STORAGE_TYPE=s3
@@ -43,9 +55,3 @@ services:
   #     - NOWEN_S3_ACCESS_KEY=minioadmin
   #     - NOWEN_S3_SECRET_KEY=minioadmin
   #     - NOWEN_S3_USE_SSL=false
-
-volumes:
-  nowen-data:
-    driver: local
-  # minio-data:
-  #   driver: local

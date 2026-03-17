@@ -99,6 +99,114 @@ cd web && npm run build
 go build -o nowen-file .
 ```
 
+## 🐳 Docker 部署
+
+### 快速启动（推荐）
+
+```bash
+# 拉取镜像（自动匹配 amd64/arm64 架构）
+docker pull nowen/nowen-file:latest
+
+# 一键启动
+docker run -d \
+  --name nowen-file \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -v /your/path/data:/app/data \
+  -e NOWEN_JWT_SECRET=your-secret-key \
+  nowen/nowen-file:latest
+```
+
+启动后访问 `http://NAS的IP:8080` 即可使用。
+
+### 使用 Docker Compose
+
+```bash
+# 创建项目目录
+mkdir -p /volume1/docker/nowen-file && cd /volume1/docker/nowen-file
+
+# 创建 docker-compose.yml（内容见项目根目录 docker-compose.yml）
+# 启动
+docker compose up -d
+```
+
+### 🟢 绿联 NAS 部署
+
+1. 打开绿联 NAS 的 **Docker** 应用
+2. 在「镜像管理」→「仓库」中搜索 `nowen/nowen-file`，下载 `latest` 标签
+3. 下载完成后，点击「创建容器」：
+   - **端口映射**：本地端口 `8080` → 容器端口 `8080`
+   - **存储空间映射**：选择一个 NAS 本地目录（如 `/volume1/docker/nowen-file/data`）→ 容器目录 `/app/data`
+   - **环境变量**：添加 `NOWEN_JWT_SECRET`，值设置为你自定义的密钥
+4. 启动容器后，浏览器访问 `http://NAS的IP:8080`
+
+### 🔵 群晖 NAS 部署（Synology）
+
+**方式一：Container Manager（DSM 7.2+）**
+
+1. 打开 **Container Manager** → 「项目」→「新建」
+2. 选择路径，粘贴以下 docker-compose 内容：
+   ```yaml
+   services:
+     nowen-file:
+       image: nowen/nowen-file:latest
+       container_name: nowen-file
+       restart: unless-stopped
+       ports:
+         - "8080:8080"
+       volumes:
+         - /volume1/docker/nowen-file/data:/app/data
+       environment:
+         - NOWEN_JWT_SECRET=your-secret-key
+   ```
+3. 点击「部署」即可
+
+**方式二：SSH 命令行**
+
+```bash
+docker run -d \
+  --name nowen-file \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -v /volume1/docker/nowen-file/data:/app/data \
+  -e NOWEN_JWT_SECRET=your-secret-key \
+  nowen/nowen-file:latest
+```
+
+### 🟠 威联通 NAS 部署（QNAP）
+
+1. 打开 **Container Station**
+2. 「创建」→ 搜索 `nowen/nowen-file`
+3. 配置端口映射 `8080:8080` 和存储卷映射
+4. 设置环境变量 `NOWEN_JWT_SECRET`
+5. 启动容器
+
+### 🟤 飞牛 NAS 部署（fnOS）
+
+1. 打开 **Docker** 管理
+2. 「镜像」→ 搜索并拉取 `nowen/nowen-file:latest`
+3. 创建容器时配置端口映射和目录映射（同上）
+4. 启动即可使用
+
+### 自行构建镜像
+
+```bash
+# 单架构构建
+docker build -t nowen-file:latest .
+
+# 多架构构建并推送（需要 Docker Buildx）
+docker buildx create --use
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t nowen/nowen-file:latest --push .
+```
+
+### 支持的架构
+
+| 架构 | 适用平台 |
+|:---|:---|
+| `linux/amd64` | 大部分 x86 NAS（群晖 x86 系列、威联通 x86 系列）、PC/服务器 |
+| `linux/arm64` | 绿联 NAS、群晖 ARM 系列、威联通 ARM 系列、飞牛 NAS、树莓派 4/5 |
+
 ## ⚙️ 环境变量配置
 
 ### 基础配置
