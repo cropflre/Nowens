@@ -1,0 +1,32 @@
+# 二进制输出
+nowen-file
+nowen-file.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# 数据目录
+data/
+
+# 测试覆盖率
+*.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 前端 node_modules
+web/node_modules/
+web/dist/
+
+# 环境变量
+.env
+.env.local
