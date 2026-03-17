@@ -292,11 +292,6 @@ func (s *FileService) GetFilePath(file *model.FileItem) string {
 }
 
 // GetFileReader 获取文件内容的 Reader（支持所有存储后端）
-// GetStorage 获取存储引擎（供其他服务使用）
-func (s *FileService) GetStorage() storage.Storage {
-	return s.storage
-}
-
 func (s *FileService) GetFileReader(file *model.FileItem) (io.ReadCloser, error) {
 	return s.storage.Get(file.StorePath)
 }
