@@ -1,11 +1,16 @@
 package router
 
 import (
+	"log"
+	"net/http"
 	"nowen-file/config"
 	"nowen-file/handler"
 	"nowen-file/middleware"
 	"nowen-file/service"
 	"nowen-file/storage"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -224,6 +229,74 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 		adminGroup.POST("/users/:id/reset-password", adminHandler.ResetPassword) // 重置密码
 		adminGroup.GET("/logs", adminHandler.ListAuditLogs)                      // 审计日志
 		adminGroup.GET("/files", adminHandler.SystemFiles)                       // 系统文件统计
+	}
+
+	// ==================== 前端静态文件服务 ====================
+	// 查找前端构建目录（支持 Docker 和本地开发两种路径）
+	webDistDir := ""
+	candidates := []string{
+		"web/dist",      // 本地开发
+		"./web/dist",    // 本地开发
+		"/app/web/dist", // Docker 容器内
+	}
+	for _, dir := range candidates {
+		absDir, _ := filepath.Abs(dir)
+		if info, err := os.Stat(absDir); err == nil && info.IsDir() {
+			webDistDir = absDir
+			break
+		}
+	}
+
+	if webDistDir != "" {
+		// 提供静态资源文件
+		fileSystem := http.Dir(webDistDir)
+		r.Use(func(c *gin.Context) {
+			path := c.Request.URL.Path
+
+			// 跳过 API 和 WebDAV 请求
+			if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/dav/") {
+				c.Next()
+				return
+			}
+
+			// 尝试提供静态文件
+			filePath := filepath.Join(webDistDir, path)
+			if _, err := os.Stat(filePath); err == nil {
+				http.FileServer(fileSystem).ServeHTTP(c.Writer, c.Request)
+				c.Abort()
+				return
+			}
+
+			c.Next()
+		})
+
+		// SPA fallback：所有未匹配的路由返回 index.html
+		r.NoRoute(func(c *gin.Context) {
+			path := c.Request.URL.Path
+
+			// API 和 WebDAV 请求不走 fallback
+			if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/dav/") {
+				c.JSON(404, gin.H{"error": "接口不存在"})
+				return
+			}
+
+			indexPath := filepath.Join(webDistDir, "index.html")
+			if _, err := os.Stat(indexPath); err == nil {
+				c.File(indexPath)
+				return
+			}
+
+			c.JSON(404, gin.H{"error": "页面未找到"})
+		})
+
+		// 输出日志
+		log.Printf("🌍 前端静态文件目录: %s", webDistDir)
+	} else {
+		log.Printf("⚠️  未找到前端构建目录 (web/dist)，仅提供 API 服务")
+
+		r.NoRoute(func(c *gin.Context) {
+			c.JSON(404, gin.H{"error": "接口不存在，前端未部署"})
+		})
 	}
 
 	return r
