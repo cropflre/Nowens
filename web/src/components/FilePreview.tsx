@@ -4,6 +4,10 @@ import { DownloadOutlined, FileUnknownOutlined } from '@ant-design/icons'
 import type { FileItem } from '@/types'
 import { getPreviewUrl, getDownloadUrl } from '@/api/file'
 import { formatFileSize } from '@/utils'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
+import 'highlight.js/styles/github.css'
 
 interface Props {
   open: boolean
@@ -11,14 +15,46 @@ interface Props {
   onClose: () => void
 }
 
-function getPreviewType(mimeType: string): string {
+// 判断文件类型用于预览
+function getPreviewType(mimeType: string, fileName: string): string {
   if (!mimeType) return 'unknown'
   if (mimeType.startsWith('image/')) return 'image'
   if (mimeType.startsWith('video/')) return 'video'
   if (mimeType.startsWith('audio/')) return 'audio'
   if (mimeType === 'application/pdf') return 'pdf'
-  if (mimeType.startsWith('text/') || mimeType === 'application/json') return 'text'
+
+  // Markdown 文件
+  if (mimeType === 'text/markdown' || fileName?.endsWith('.md') || fileName?.endsWith('.markdown')) {
+    return 'markdown'
+  }
+
+  // 代码文件（语法高亮）
+  const codeExtensions = [
+    '.js', '.jsx', '.ts', '.tsx', '.py', '.go', '.rs', '.java', '.c', '.cpp',
+    '.h', '.hpp', '.cs', '.rb', '.php', '.swift', '.kt', '.sh', '.bash',
+    '.yaml', '.yml', '.toml', '.ini', '.conf', '.sql', '.vue', '.svelte',
+    '.dockerfile', '.makefile', '.cmake',
+  ]
+  const ext = fileName ? '.' + fileName.split('.').pop()?.toLowerCase() : ''
+  if (codeExtensions.includes(ext)) return 'code'
+
+  if (mimeType.startsWith('text/') || mimeType === 'application/json' || mimeType === 'application/xml') return 'text'
   return 'unknown'
+}
+
+// 根据文件扩展名获取代码语言
+function getCodeLanguage(fileName: string): string {
+  const ext = fileName?.split('.').pop()?.toLowerCase() || ''
+  const langMap: Record<string, string> = {
+    js: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript',
+    py: 'python', go: 'go', rs: 'rust', java: 'java', c: 'c', cpp: 'cpp',
+    h: 'c', hpp: 'cpp', cs: 'csharp', rb: 'ruby', php: 'php',
+    swift: 'swift', kt: 'kotlin', sh: 'bash', bash: 'bash',
+    yaml: 'yaml', yml: 'yaml', toml: 'toml', sql: 'sql',
+    json: 'json', xml: 'xml', html: 'html', css: 'css',
+    vue: 'html', svelte: 'html', dockerfile: 'dockerfile',
+  }
+  return langMap[ext] || ext
 }
 
 export default function FilePreview({ open, file, onClose }: Props) {
@@ -36,12 +72,13 @@ export default function FilePreview({ open, file, onClose }: Props) {
   const loadPreview = async () => {
     if (!file) return
     const mime = file.mime_type || ''
-    const type = getPreviewType(mime)
+    const type = getPreviewType(mime, file.name)
     setPreviewType(type)
     const url = getPreviewUrl(file.uuid)
     setPreviewUrl(url)
 
-    if (type === 'text') {
+    // 文本类内容需要获取文本
+    if (['text', 'code', 'markdown'].includes(type)) {
       setLoading(true)
       try {
         const response = await fetch(url)
@@ -120,6 +157,26 @@ export default function FilePreview({ open, file, onClose }: Props) {
         ) : previewType === 'pdf' ? (
           <div style={{ height: '70vh' }}>
             <iframe src={previewUrl} width="100%" height="100%" style={{ border: 'none' }} />
+          </div>
+        ) : previewType === 'markdown' ? (
+          <div
+            className="markdown-preview"
+            style={{
+              padding: '24px 32px', background: '#fff', minHeight: 400, maxHeight: '70vh', overflow: 'auto',
+              lineHeight: 1.8, fontSize: 15, color: '#303133',
+            }}
+          >
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+              {textContent}
+            </ReactMarkdown>
+          </div>
+        ) : previewType === 'code' ? (
+          <div style={{ padding: 0, background: '#f6f8fa', minHeight: 400, maxHeight: '70vh', overflow: 'auto' }}>
+            <pre style={{ margin: 0, padding: 16 }}>
+              <code className={`language-${getCodeLanguage(file?.name || '')}`}>
+                {textContent}
+              </code>
+            </pre>
           </div>
         ) : previewType === 'text' ? (
           <div style={{ padding: 16, background: '#fafafa', minHeight: 400, maxHeight: '70vh', overflow: 'auto' }}>

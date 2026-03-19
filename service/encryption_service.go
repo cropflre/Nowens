@@ -6,11 +6,13 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"nowen-file/model"
 
+	"golang.org/x/crypto/argon2"
 	"gorm.io/gorm"
 )
 
@@ -22,15 +24,40 @@ func NewEncryptionService() *EncryptionService {
 	return &EncryptionService{}
 }
 
-// deriveKey 从密码派生 256 位 AES 密钥（使用 SHA-256）
-func deriveKey(password string) []byte {
-	hash := sha256.Sum256([]byte(password))
-	return hash[:]
+// argon2 参数常量
+const (
+	argon2Time    = 1         // 迭代次数
+	argon2Memory  = 64 * 1024 // 内存用量 64MB
+	argon2Threads = 4         // 并行线程数
+	argon2KeyLen  = 32        // 输出密钥长度（256 位）
+	saltSize      = 16        // salt 长度
+)
+
+// deriveKey 从密码和 salt 派生 256 位 AES 密钥（使用 argon2id）
+func deriveKey(password string, salt []byte) []byte {
+	return argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
 }
 
-// Encrypt 加密数据 (AES-256-GCM)
+// generateSalt 生成随机 salt
+func generateSalt() ([]byte, error) {
+	salt := make([]byte, saltSize)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, fmt.Errorf("生成 salt 失败: %v", err)
+	}
+	return salt, nil
+}
+
+// Encrypt 加密数据 (AES-256-GCM + argon2id 密钥派生)
+// 输出格式: [version(1B)] [saltLen(2B)] [salt] [nonce] [ciphertext]
 func (s *EncryptionService) Encrypt(data []byte, password string) ([]byte, error) {
-	key := deriveKey(password)
+	// 生成随机 salt
+	salt, err := generateSalt()
+	if err != nil {
+		return nil, err
+	}
+
+	// 使用 argon2id 派生密钥
+	key := deriveKey(password, salt)
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -48,16 +75,86 @@ func (s *EncryptionService) Encrypt(data []byte, password string) ([]byte, error
 		return nil, fmt.Errorf("生成随机数失败: %v", err)
 	}
 
-	// 加密: nonce + ciphertext (nonce 会作为前缀附加)
-	ciphertext := gcm.Seal(nonce, nonce, data, nil)
-	return ciphertext, nil
+	// 加密
+	ciphertext := gcm.Seal(nil, nonce, data, nil)
+
+	// 组装输出: version(1B) + saltLen(2B) + salt + nonce + ciphertext
+	var buf bytes.Buffer
+	buf.WriteByte(0x01) // 版本号，便于未来格式升级
+	saltLenBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(saltLenBytes, uint16(len(salt)))
+	buf.Write(saltLenBytes)
+	buf.Write(salt)
+	buf.Write(nonce)
+	buf.Write(ciphertext)
+
+	return buf.Bytes(), nil
 }
 
-// Decrypt 解密数据
+// Decrypt 解密数据（自动兼容新旧格式）
 func (s *EncryptionService) Decrypt(data []byte, password string) ([]byte, error) {
-	key := deriveKey(password)
+	if len(data) < 4 {
+		return nil, errors.New("密文数据不完整")
+	}
+
+	// 检查版本号，判断是新格式还是旧格式
+	if data[0] == 0x01 {
+		// 新格式: version(1B) + saltLen(2B) + salt + nonce + ciphertext
+		return s.decryptV1(data, password)
+	}
+
+	// 旧格式兼容: nonce + ciphertext（使用 SHA-256 派生密钥）
+	return s.decryptLegacy(data, password)
+}
+
+// decryptV1 解密 V1 格式（argon2id 密钥派生）
+func (s *EncryptionService) decryptV1(data []byte, password string) ([]byte, error) {
+	// 解析: version(1B) + saltLen(2B) + salt + nonce + ciphertext
+	if len(data) < 3 {
+		return nil, errors.New("密文数据不完整")
+	}
+
+	saltLen := int(binary.BigEndian.Uint16(data[1:3]))
+	headerLen := 3 + saltLen
+	if len(data) < headerLen {
+		return nil, errors.New("密文数据不完整")
+	}
+
+	salt := data[3:headerLen]
+	key := deriveKey(password, salt)
 
 	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("创建解密器失败: %v", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("创建 GCM 失败: %v", err)
+	}
+
+	nonceSize := gcm.NonceSize()
+	payload := data[headerLen:]
+	if len(payload) < nonceSize {
+		return nil, errors.New("密文数据不完整")
+	}
+
+	nonce, ciphertext := payload[:nonceSize], payload[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, errors.New("解密失败，密码可能不正确")
+	}
+
+	return plaintext, nil
+}
+
+// decryptLegacy 兼容旧格式解密（SHA-256 密钥派生，无 salt）
+func (s *EncryptionService) decryptLegacy(data []byte, password string) ([]byte, error) {
+	// 使用旧版 SHA-256 方式派生密钥（仅用于向后兼容）
+	hash := sha256.Sum256([]byte(password))
+	legacyKey := hash[:]
+
+	block, err := aes.NewCipher(legacyKey)
 	if err != nil {
 		return nil, fmt.Errorf("创建解密器失败: %v", err)
 	}

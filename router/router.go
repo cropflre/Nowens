@@ -16,8 +16,10 @@ import (
 )
 
 // Setup 初始化路由
-func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.Storage, scheduler *service.CronScheduler) *gin.Engine {
-	r := gin.Default()
+func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.Storage, scheduler *service.CronScheduler, searchService *service.FullTextSearchService) *gin.Engine {
+	r := gin.New()
+	r.Use(gin.Logger())
+	r.Use(middleware.Recovery()) // 统一 panic 恢复，返回 JSON 错误
 
 	// 全局中间件
 	r.Use(middleware.Cors())
@@ -38,8 +40,12 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 	notificationHandler := handler.NewNotificationHandler()
 	dashboardHandler := handler.NewDashboardHandler(fileHandler.GetFileService())
 	syncScheduleHandler := handler.NewSyncScheduleHandler(scheduler)
+	chunkHandler := handler.NewChunkUploadHandler(store, cfg.UploadDir, cfg.ThumbDir)
 	encryptionHandler := handler.NewEncryptionHandler(fileHandler.GetFileService())
 	workspaceHandler := handler.NewWorkspaceHandler()
+	commentHandler := handler.NewCommentHandler()
+	activityHandler := handler.NewActivityHandler()
+	searchHandler := handler.NewSearchHandler(searchService)
 	agentHandler := handler.NewAgentHandler()
 
 	// ==================== WebDAV 接口 ====================
@@ -51,12 +57,14 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 
 	// ==================== 公开接口 ====================
 	api := r.Group("/api")
+	api.Use(middleware.APIRateLimiter()) // 全局 API 速率限制
 	{
 		// 认证接口
 		authGroup := api.Group("/auth")
 		{
-			authGroup.POST("/register", userHandler.Register)
-			authGroup.POST("/login", userHandler.Login)
+			authGroup.POST("/register", middleware.LoginRateLimiter(), userHandler.Register)
+			authGroup.POST("/login", middleware.LoginRateLimiter(), userHandler.Login)
+			authGroup.POST("/refresh", userHandler.RefreshToken) // Token 刷新
 		}
 
 		// 分享公开接口（不需要登录）
@@ -83,25 +91,28 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 		// 文件管理接口
 		fileGroup := authorized.Group("/files")
 		{
-			fileGroup.GET("/list", fileHandler.ListFiles)                     // 文件列表
-			fileGroup.POST("/folder", fileHandler.CreateFolder)               // 创建文件夹
-			fileGroup.POST("/upload", fileHandler.Upload)                     // 上传文件
-			fileGroup.GET("/download/:uuid", fileHandler.Download)            // 下载文件
-			fileGroup.GET("/preview/:uuid", fileHandler.Preview)              // 预览文件内容
-			fileGroup.GET("/preview-info/:uuid", fileHandler.PreviewInfo)     // 预览元信息
-			fileGroup.GET("/thumb/:uuid", fileHandler.Thumbnail)              // 缩略图
-			fileGroup.PUT("/rename", fileHandler.Rename)                      // 重命名
-			fileGroup.PUT("/move", fileHandler.Move)                          // 移动
-			fileGroup.POST("/trash", fileHandler.Trash)                       // 移入回收站
-			fileGroup.POST("/restore", fileHandler.Restore)                   // 从回收站恢复
-			fileGroup.GET("/trash", fileHandler.ListTrash)                    // 回收站列表
-			fileGroup.DELETE("/:id", fileHandler.Delete)                      // 永久删除
-			fileGroup.GET("/search", fileHandler.Search)                      // 搜索
-			fileGroup.GET("/type/:type", fileHandler.SearchByType)            // 按类型搜索
-			fileGroup.GET("/storage", fileHandler.StorageStats)               // 存储统计
-			fileGroup.POST("/instant-upload", fileHandler.CheckInstantUpload) // 秒传检查
-			fileGroup.GET("/content/:uuid", fileHandler.GetTextContent)       // 获取文本内容
-			fileGroup.PUT("/content/:uuid", fileHandler.SaveTextContent)      // 保存文本内容
+			fileGroup.GET("/list", fileHandler.ListFiles)                                 // 文件列表
+			fileGroup.POST("/folder", fileHandler.CreateFolder)                           // 创建文件夹
+			fileGroup.POST("/upload", middleware.UploadRateLimiter(), fileHandler.Upload) // 上传文件
+			fileGroup.GET("/download/:uuid", fileHandler.Download)                        // 下载文件
+			fileGroup.GET("/preview/:uuid", fileHandler.Preview)                          // 预览文件内容
+			fileGroup.GET("/preview-info/:uuid", fileHandler.PreviewInfo)                 // 预览元信息
+			fileGroup.GET("/thumb/:uuid", fileHandler.Thumbnail)                          // 缩略图
+			fileGroup.PUT("/rename", fileHandler.Rename)                                  // 重命名
+			fileGroup.PUT("/move", fileHandler.Move)                                      // 移动
+			fileGroup.POST("/copy", fileHandler.Copy)                                     // 复制
+			fileGroup.POST("/trash", fileHandler.Trash)                                   // 移入回收站
+			fileGroup.POST("/restore", fileHandler.Restore)                               // 从回收站恢复
+			fileGroup.GET("/trash", fileHandler.ListTrash)                                // 回收站列表
+			fileGroup.DELETE("/:id", fileHandler.Delete)                                  // 永久删除
+			fileGroup.GET("/search", fileHandler.Search)                                  // 搜索
+			fileGroup.GET("/fulltext-search", searchHandler.FullTextSearch)               // 全文搜索
+			fileGroup.POST("/fulltext-rebuild", searchHandler.RebuildIndex)               // 重建索引
+			fileGroup.GET("/type/:type", fileHandler.SearchByType)                        // 按类型搜索
+			fileGroup.GET("/storage", fileHandler.StorageStats)                           // 存储统计
+			fileGroup.POST("/instant-upload", fileHandler.CheckInstantUpload)             // 秒传检查
+			fileGroup.GET("/content/:uuid", fileHandler.GetTextContent)                   // 获取文本内容
+			fileGroup.PUT("/content/:uuid", fileHandler.SaveTextContent)                  // 保存文本内容
 
 			// 文件加密
 			fileGroup.POST("/encrypt", encryptionHandler.EncryptFile)                // 加密文件
@@ -109,9 +120,16 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 			fileGroup.POST("/decrypt-download", encryptionHandler.DownloadDecrypted) // 临时解密下载
 
 			// 批量操作
-			fileGroup.POST("/batch/trash", fileHandler.BatchTrash)   // 批量移入回收站
-			fileGroup.POST("/batch/move", fileHandler.BatchMove)     // 批量移动
-			fileGroup.POST("/batch/delete", fileHandler.BatchDelete) // 批量永久删除
+			fileGroup.POST("/batch/trash", fileHandler.BatchTrash)       // 批量移入回收站
+			fileGroup.POST("/batch/move", fileHandler.BatchMove)         // 批量移动
+			fileGroup.POST("/batch/delete", fileHandler.BatchDelete)     // 批量永久删除
+			fileGroup.POST("/batch/download", fileHandler.BatchDownload) // 批量打包下载
+
+			// 分片上传
+			fileGroup.POST("/chunk/init", chunkHandler.InitUpload)       // 初始化分片上传
+			fileGroup.POST("/chunk/upload", chunkHandler.UploadChunk)    // 上传分片
+			fileGroup.POST("/chunk/merge", chunkHandler.MergeChunks)     // 合并分片
+			fileGroup.GET("/chunk/status", chunkHandler.GetUploadStatus) // 查询上传进度
 
 			// 文件版本
 			fileGroup.GET("/versions/:file_id", versionHandler.ListVersions)                 // 版本列表
@@ -159,6 +177,18 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 			notifyGroup.DELETE("/:id", notificationHandler.DeleteNotification)   // 删除通知
 			notifyGroup.DELETE("/clear", notificationHandler.ClearAll)           // 清空通知
 		}
+
+		// 评论接口
+		commentGroup := authorized.Group("/comments")
+		{
+			commentGroup.POST("", commentHandler.AddComment)           // 添加评论
+			commentGroup.GET("/:file_id", commentHandler.ListComments) // 获取评论列表
+			commentGroup.PUT("/:id", commentHandler.UpdateComment)     // 更新评论
+			commentGroup.DELETE("/:id", commentHandler.DeleteComment)  // 删除评论
+		}
+
+		// 活动流接口
+		authorized.GET("/activities", activityHandler.ListActivities) // 用户活动流
 
 		// 个人仪表盘
 		authorized.GET("/dashboard", dashboardHandler.GetDashboard)

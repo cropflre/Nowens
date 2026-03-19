@@ -17,6 +17,10 @@ type CronScheduler struct {
 	wg                  sync.WaitGroup
 	running             bool
 	mu                  sync.Mutex
+
+	// 回收站清理和分片清理所需服务
+	fileService        *FileService
+	chunkUploadService *ChunkUploadService
 }
 
 // NewCronScheduler 创建调度器
@@ -26,6 +30,16 @@ func NewCronScheduler() *CronScheduler {
 		notificationService: NewNotificationService(),
 		stopChan:            make(chan struct{}),
 	}
+}
+
+// SetFileService 设置文件服务（用于回收站自动清理）
+func (c *CronScheduler) SetFileService(fs *FileService) {
+	c.fileService = fs
+}
+
+// SetChunkUploadService 设置分片上传服务（用于清理过期分片）
+func (c *CronScheduler) SetChunkUploadService(cs *ChunkUploadService) {
+	c.chunkUploadService = cs
 }
 
 // Start 启动调度器（后台协程，每分钟检查一次是否有任务需要执行）
@@ -44,12 +58,22 @@ func (c *CronScheduler) Start() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 
+		// 回收站清理定时器（每 6 小时执行一次）
+		trashTicker := time.NewTicker(6 * time.Hour)
+		defer trashTicker.Stop()
+
 		log.Println("⏰ 定时同步调度器已启动")
+		log.Println("🗑️ 回收站自动清理已启用（30 天过期，每 6 小时检查）")
+
+		// 启动时立即执行一次清理
+		go c.runCleanupTasks()
 
 		for {
 			select {
 			case <-ticker.C:
 				c.checkAndRun()
+			case <-trashTicker.C:
+				go c.runCleanupTasks()
 			case <-c.stopChan:
 				log.Println("⏰ 定时同步调度器已停止")
 				return
@@ -288,4 +312,20 @@ func (c *CronScheduler) GetScheduleByMount(mountID uint) (*model.SyncSchedule, e
 		return nil, fmt.Errorf("未找到定时任务")
 	}
 	return &sched, nil
+}
+
+// runCleanupTasks 执行清理任务（回收站 + 过期分片上传）
+func (c *CronScheduler) runCleanupTasks() {
+	// 清理超过 30 天的回收站文件
+	if c.fileService != nil {
+		deleted := c.fileService.CleanExpiredTrash(30)
+		if deleted > 0 {
+			log.Printf("🗑️ 回收站自动清理完成，删除 %d 个过期文件", deleted)
+		}
+	}
+
+	// 清理超过 24 小时的未完成分片上传
+	if c.chunkUploadService != nil {
+		c.chunkUploadService.CleanExpiredUploads()
+	}
 }

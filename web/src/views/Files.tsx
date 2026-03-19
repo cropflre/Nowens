@@ -16,14 +16,16 @@ import type { FileItem, ShareLink, Tag as TagType } from '@/types'
 import { formatFileSize, formatDate, getFileIcon, getFileColor } from '@/utils'
 import {
   createFolder, uploadFile, renameFile, trashFile,
-  searchFiles, getDownloadUrl, batchTrash,
+  searchFiles, getDownloadUrl, batchTrash, batchDownload, smartUpload, copyFile,
 } from '@/api/file'
 import { createShare } from '@/api/share'
 import { addFavorite, removeFavorite, checkFavorite } from '@/api/favorite'
 import { getTags, tagFile, untagFile, getFileTags } from '@/api/tag'
 import { encryptFile, decryptFile } from '@/api/encryption'
+import { fullTextSearch, type FullTextSearchResult } from '@/api/search'
 import FilePreview from '@/components/FilePreview'
 import FileVersions from '@/components/FileVersions'
+import FileComments from '@/components/FileComments'
 
 // 判断文件是否支持在线编辑
 function isTextEditable(mimeType: string): boolean {
@@ -37,6 +39,9 @@ export default function Files() {
   const navigate = useNavigate()
   const fileStore = useFileStore()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const dragCounter = useRef(0)
 
   // 上传相关
   interface UploadTask {
@@ -54,6 +59,8 @@ export default function Files() {
   const [isSearchMode, setIsSearchMode] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [searchResults, setSearchResults] = useState<FileItem[]>([])
+  const [fullTextResults, setFullTextResults] = useState<FullTextSearchResult[]>([])
+  const [isFullTextSearch, setIsFullTextSearch] = useState(false)
 
   // 新建文件夹
   const [showNewFolder, setShowNewFolder] = useState(false)
@@ -93,6 +100,10 @@ export default function Files() {
   const [encryptTarget, setEncryptTarget] = useState<FileItem | null>(null)
   const [encryptPassword, setEncryptPassword] = useState('')
   const [encryptAction, setEncryptAction] = useState<'encrypt' | 'decrypt'>('encrypt')
+
+  // 评论
+  const [showComments, setShowComments] = useState(false)
+  const [commentTarget, setCommentTarget] = useState<FileItem | null>(null)
 
   const displayFiles = isSearchMode ? searchResults : fileStore.files
 
@@ -197,23 +208,132 @@ export default function Files() {
     })
   }
 
+  // 批量下载
+  const handleBatchDownload = async () => {
+    if (selectedIds.size === 0) return
+    try {
+      message.loading({ content: '正在打包下载...', key: 'batch-download', duration: 0 })
+      const res = await batchDownload(Array.from(selectedIds))
+      // 触发下载
+      const blob = new Blob([res as any], { type: 'application/zip' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `批量下载_${selectedIds.size}个文件.zip`
+      a.click()
+      URL.revokeObjectURL(url)
+      message.success({ content: '下载完成', key: 'batch-download' })
+    } catch {
+      message.error({ content: '打包下载失败', key: 'batch-download' })
+    }
+  }
+
   const triggerUpload = () => fileInputRef.current?.click()
+  const triggerFolderUpload = () => folderInputRef.current?.click()
+
+  // 拖拽上传
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current++
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragging(true)
+    }
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current--
+    if (dragCounter.current === 0) {
+      setIsDragging(false)
+    }
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    dragCounter.current = 0
+
+    const items = e.dataTransfer.items
+    if (!items || items.length === 0) return
+
+    const files: File[] = []
+
+    // 支持拖拽文件夹（通过 webkitGetAsEntry API）
+    const readEntry = async (entry: any, path: string = ''): Promise<void> => {
+      if (entry.isFile) {
+        const file: File = await new Promise((resolve) => entry.file(resolve))
+        // 保留相对路径，供后续创建文件夹结构
+        Object.defineProperty(file, 'webkitRelativePath', { value: path + file.name, writable: false })
+        files.push(file)
+      } else if (entry.isDirectory) {
+        const reader = entry.createReader()
+        const entries: any[] = await new Promise((resolve) => reader.readEntries(resolve))
+        for (const child of entries) {
+          await readEntry(child, path + entry.name + '/')
+        }
+      }
+    }
+
+    // 尝试获取 FileSystemEntry
+    const entries: any[] = []
+    for (let i = 0; i < items.length; i++) {
+      const entry = items[i].webkitGetAsEntry?.()
+      if (entry) entries.push(entry)
+    }
+
+    if (entries.length > 0) {
+      for (const entry of entries) {
+        await readEntry(entry)
+      }
+    } else {
+      // 回退到普通文件列表
+      for (let i = 0; i < e.dataTransfer.files.length; i++) {
+        files.push(e.dataTransfer.files[i])
+      }
+    }
+
+    if (files.length > 0) {
+      processUploadFiles(files)
+    }
+  }
+
+  // 文件夹上传
+  const handleFolderSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+    processUploadFiles(Array.from(files))
+    e.target.value = ''
+  }
 
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files || files.length === 0) return
+    processUploadFiles(Array.from(files))
+    e.target.value = ''
+  }
 
+  // 通用上传处理（支持普通上传和分片上传）
+  const processUploadFiles = async (files: File[]) => {
     const tasks: UploadTask[] = []
-    for (const file of Array.from(files)) {
+    for (const file of files) {
       const task: UploadTask = { name: file.name, percent: 0, status: 'uploading' }
       tasks.push(task)
     }
     setUploadTasks((prev) => [...prev, ...tasks])
 
-    for (let i = 0; i < Array.from(files).length; i++) {
-      const file = Array.from(files)[i]
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
       try {
-        await uploadFile(fileStore.currentParentId, file, (percent) => {
+        // 使用智能上传（小文件直传，大文件分片）
+        await smartUpload(fileStore.currentParentId, file, (percent) => {
           setUploadTasks((prev) => {
             const updated = [...prev]
             const idx = updated.findIndex((t) => t.name === file.name && t.status === 'uploading')
@@ -238,7 +358,6 @@ export default function Files() {
     }
 
     fileStore.loadFiles()
-    e.target.value = ''
   }
 
   const handleCreateFolder = async () => {
@@ -327,6 +446,15 @@ export default function Files() {
       handleOpenTagModal(file)
     } else if (action === 'edit') {
       navigate(`/editor?uuid=${file.uuid}`)
+    } else if (action === 'copy') {
+      try {
+        await copyFile({ file_id: file.id, target_id: fileStore.currentParentId })
+        message.success('复制成功')
+        fileStore.loadFiles()
+      } catch {}
+    } else if (action === 'comment') {
+      setCommentTarget(file)
+      setShowComments(true)
     } else if (action === 'encrypt') {
       setEncryptTarget(file)
       setEncryptAction('encrypt')
@@ -345,10 +473,20 @@ export default function Files() {
     setSearchKeyword(keyword)
     setIsSearchMode(true)
     try {
-      const res = await searchFiles(keyword)
-      setSearchResults(res.data || [])
+      if (isFullTextSearch) {
+        // 全文搜索
+        const res = await fullTextSearch(keyword)
+        setFullTextResults(res.data?.list || [])
+        setSearchResults([])
+      } else {
+        // 普通文件名搜索
+        const res = await searchFiles(keyword)
+        setSearchResults(res.data || [])
+        setFullTextResults([])
+      }
     } catch {
       setSearchResults([])
+      setFullTextResults([])
     }
   }
 
@@ -356,6 +494,7 @@ export default function Files() {
     setIsSearchMode(false)
     setSearchKeyword('')
     setSearchResults([])
+    setFullTextResults([])
     navigate('/files')
     fileStore.loadFiles(0)
   }
@@ -413,6 +552,8 @@ export default function Files() {
                 ...(!record.is_dir && isTextEditable(record.mime_type) ? [{ key: 'edit', label: '在线编辑', icon: <EditOutlined /> }] : []),
                 ...(!record.is_dir && !record.is_encrypted ? [{ key: 'encrypt', label: '加密文件', icon: <LockOutlined /> }] : []),
                 ...(!record.is_dir && record.is_encrypted ? [{ key: 'decrypt', label: '解密文件', icon: <UnlockOutlined /> }] : []),
+                { key: 'copy', label: '复制' },
+                { key: 'comment', label: '评论' },
                 { key: 'favorite', label: favoritedIds.has(record.id) ? '取消收藏' : '收藏', icon: favoritedIds.has(record.id) ? <StarFilled style={{ color: '#faad14' }} /> : <StarOutlined /> },
                 { key: 'tag', label: '管理标签', icon: <TagsOutlined /> },
                 { type: 'divider' as const },
@@ -430,7 +571,28 @@ export default function Files() {
   ]
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div
+      style={{ position: 'relative' }}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {/* 拖拽上传遮罩层 */}
+      {isDragging && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 999,
+          background: 'rgba(24, 144, 255, 0.08)', border: '3px dashed #1890ff',
+          borderRadius: 12, display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', pointerEvents: 'none',
+        }}>
+          <UploadOutlined style={{ fontSize: 64, color: '#1890ff' }} />
+          <p style={{ fontSize: 18, color: '#1890ff', marginTop: 16, fontWeight: 500 }}>
+            松开鼠标上传文件
+          </p>
+          <p style={{ fontSize: 13, color: '#909399' }}>支持拖拽文件和文件夹</p>
+        </div>
+      )}
       {/* 工具栏 */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', marginBottom: 8 }}>
         <Breadcrumb
@@ -457,6 +619,19 @@ export default function Files() {
             multiple
             style={{ display: 'none' }}
             onChange={handleFileSelected}
+          />
+          <Button icon={<FolderAddOutlined />} onClick={triggerFolderUpload}>
+            上传文件夹
+          </Button>
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            /* @ts-ignore */
+            directory=""
+            webkitdirectory=""
+            style={{ display: 'none' }}
+            onChange={handleFolderSelected}
           />
           <Button icon={<FolderAddOutlined />} onClick={() => setShowNewFolder(true)}>
             新建文件夹
@@ -499,6 +674,9 @@ export default function Files() {
           <Button danger size="small" disabled={selectedIds.size === 0} onClick={handleBatchTrash}>
             批量删除
           </Button>
+          <Button type="primary" size="small" disabled={selectedIds.size === 0} icon={<DownloadOutlined />} onClick={handleBatchDownload}>
+            批量下载
+          </Button>
           <Button size="small" onClick={() => { setIsMultiSelect(false); setSelectedIds(new Set()) }}>
             取消
           </Button>
@@ -507,12 +685,54 @@ export default function Files() {
 
       {/* 搜索结果提示 */}
       {isSearchMode && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px',
-          background: '#e6f7ff', borderRadius: 6, marginBottom: 12, fontSize: 14, color: '#1890ff',
-        }}>
-          <span>搜索 "{searchKeyword}" 的结果（{searchResults.length} 个）</span>
-          <Button type="link" onClick={exitSearch}>清除搜索</Button>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px',
+            background: '#e6f7ff', borderRadius: 6, fontSize: 14, color: '#1890ff',
+          }}>
+            <span>
+              {isFullTextSearch ? '全文搜索' : '搜索'} "{searchKeyword}" 的结果
+              （{isFullTextSearch ? fullTextResults.length : searchResults.length} 个）
+            </span>
+            <Button type="link" size="small" onClick={() => {
+              setIsFullTextSearch(!isFullTextSearch)
+              handleSearchByKeyword(searchKeyword)
+            }}>
+              切换到{isFullTextSearch ? '文件名搜索' : '全文搜索'}
+            </Button>
+            <Button type="link" onClick={exitSearch}>清除搜索</Button>
+          </div>
+
+          {/* 全文搜索结果列表 */}
+          {isFullTextSearch && fullTextResults.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              {fullTextResults.map((item) => (
+                <div
+                  key={item.file_id}
+                  style={{
+                    padding: '10px 14px', background: '#fff', borderRadius: 8,
+                    marginBottom: 6, border: '1px solid #f0f0f0', cursor: 'pointer',
+                    transition: 'box-shadow 0.2s',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.boxShadow = 'none')}
+                >
+                  <div style={{ fontWeight: 500, fontSize: 14, color: '#303133' }}>
+                    {item.file_name}
+                  </div>
+                  {item.highlight && (
+                    <div
+                      style={{ fontSize: 12, color: '#606266', marginTop: 4, lineHeight: 1.6 }}
+                      dangerouslySetInnerHTML={{ __html: item.highlight }}
+                    />
+                  )}
+                  <div style={{ fontSize: 11, color: '#c0c4cc', marginTop: 4 }}>
+                    匹配度: {item.score.toFixed(2)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -771,6 +991,14 @@ export default function Files() {
           </div>
         )}
       </Modal>
+
+      {/* 文件评论 */}
+      <FileComments
+        open={showComments}
+        fileId={commentTarget?.id ?? null}
+        fileName={commentTarget?.name || ''}
+        onClose={() => setShowComments(false)}
+      />
 
       {/* 上传进度 */}
       {uploadTasks.length > 0 && (

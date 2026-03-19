@@ -7,6 +7,7 @@ import (
 	"nowen-file/model"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -38,9 +39,13 @@ func (s *ShareService) CreateShare(userID uint, fileID uint, password string, ex
 		UserID: userID,
 	}
 
-	// 设置密码
+	// 设置密码（bcrypt 哈希存储）
 	if password != "" {
-		share.Password = password
+		hashedPwd, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, errors.New("密码加密失败")
+		}
+		share.Password = string(hashedPwd)
 	}
 
 	// 设置过期时间
@@ -80,13 +85,18 @@ func (s *ShareService) GetShare(code string) (*model.ShareLink, *model.FileItem,
 	return &share, &file, nil
 }
 
-// VerifySharePassword 验证分享密码
+// VerifySharePassword 验证分享密码（使用 bcrypt 安全比对）
 func (s *ShareService) VerifySharePassword(code, password string) bool {
 	var share model.ShareLink
 	if err := model.DB.Where("code = ?", code).First(&share).Error; err != nil {
 		return false
 	}
-	return share.Password == "" || share.Password == password
+	// 无密码保护的分享直接通过
+	if share.Password == "" {
+		return true
+	}
+	// 使用 bcrypt 安全比对
+	return bcrypt.CompareHashAndPassword([]byte(share.Password), []byte(password)) == nil
 }
 
 // DeleteShare 删除分享链接

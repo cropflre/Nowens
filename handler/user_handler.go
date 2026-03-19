@@ -56,15 +56,16 @@ func (h *UserHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// 注册成功自动生成 Token
-	token, _ := h.auth.GenerateToken(user.ID, user.Username, user.Role)
+	// 注册成功自动生成 Token 对
+	accessToken, refreshToken, _ := h.auth.GenerateTokenPair(user.ID, user.Username, user.Role)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"msg":  "注册成功",
 		"data": gin.H{
-			"user":  user,
-			"token": token,
+			"user":          user,
+			"token":         accessToken,
+			"refresh_token": refreshToken,
 		},
 	})
 }
@@ -90,7 +91,7 @@ func (h *UserHandler) Login(c *gin.Context) {
 		return
 	}
 
-	token, err := h.auth.GenerateToken(user.ID, user.Username, user.Role)
+	accessToken, refreshToken, err := h.auth.GenerateTokenPair(user.ID, user.Username, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code": 500,
@@ -103,8 +104,63 @@ func (h *UserHandler) Login(c *gin.Context) {
 		"code": 0,
 		"msg":  "登录成功",
 		"data": gin.H{
-			"user":  user,
-			"token": token,
+			"user":          user,
+			"token":         accessToken,
+			"refresh_token": refreshToken,
+		},
+	})
+}
+
+// RefreshToken 刷新 Token
+// POST /api/auth/refresh
+func (h *UserHandler) RefreshToken(c *gin.Context) {
+	var req struct {
+		RefreshToken string `json:"refresh_token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code": 400,
+			"msg":  "参数错误",
+		})
+		return
+	}
+
+	// 验证 refresh_token
+	claims, err := h.auth.ValidateRefreshToken(req.RefreshToken)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code": 401,
+			"msg":  "Refresh Token 已过期或无效，请重新登录",
+		})
+		return
+	}
+
+	// 获取用户信息
+	user, err := h.userService.GetUserByID(claims.UserID)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code": 401,
+			"msg":  "用户不存在",
+		})
+		return
+	}
+
+	// 生成新的 Token 对
+	accessToken, refreshToken, err := h.auth.GenerateTokenPair(user.ID, user.Username, user.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code": 500,
+			"msg":  "生成Token失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"msg":  "刷新成功",
+		"data": gin.H{
+			"token":         accessToken,
+			"refresh_token": refreshToken,
 		},
 	})
 }

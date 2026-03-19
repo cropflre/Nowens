@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Layout as AntLayout, Menu, Input, Dropdown, Avatar, Progress, Button, Drawer } from 'antd'
+import { Layout as AntLayout, Menu, Input, Dropdown, Avatar, Progress, Button, Drawer, Switch, Select } from 'antd'
 import {
   FolderOpenOutlined, DeleteOutlined, SearchOutlined,
   UserOutlined, LogoutOutlined, AppstoreOutlined,
@@ -8,12 +8,16 @@ import {
   FileTextOutlined, ShareAltOutlined, SettingOutlined,
   ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
   DownOutlined, StarOutlined, TagsOutlined, DashboardOutlined,
-  TeamOutlined,
+  TeamOutlined, ClockCircleOutlined, CameraOutlined,
+  BulbOutlined, GlobalOutlined,
 } from '@ant-design/icons'
 import { useUserStore } from '@/stores/user'
 import { useFileStore } from '@/stores/file'
+import { useThemeStore } from '@/stores/theme'
 import { formatFileSize } from '@/utils'
 import NotificationBell from '@/components/NotificationBell'
+import MobileNav from '@/components/MobileNav'
+import { useTranslation } from 'react-i18next'
 import type { MenuProps } from 'antd'
 
 const { Sider, Header, Content } = AntLayout
@@ -23,6 +27,8 @@ export default function Layout() {
   const location = useLocation()
   const { user, logout } = useUserStore()
   const { goHome } = useFileStore()
+  const { isDark, setMode, mode } = useThemeStore()
+  const { t, i18n } = useTranslation()
   const [collapsed, setCollapsed] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768)
@@ -50,63 +56,73 @@ export default function Layout() {
     {
       key: '/dashboard',
       icon: <DashboardOutlined />,
-      label: '仪表盘',
+      label: t('sidebar.dashboard'),
     },
     {
       key: '/files',
       icon: <FolderOpenOutlined />,
-      label: '全部文件',
+      label: t('sidebar.allFiles'),
     },
     {
       key: 'category',
       icon: <AppstoreOutlined />,
-      label: '文件分类',
+      label: t('sidebar.category'),
       children: [
-        { key: '/category/image', icon: <PictureOutlined />, label: '图片' },
-        { key: '/category/video', icon: <VideoCameraOutlined />, label: '视频' },
-        { key: '/category/audio', icon: <AudioOutlined />, label: '音频' },
-        { key: '/category/document', icon: <FileTextOutlined />, label: '文档' },
+        { key: '/category/image', icon: <PictureOutlined />, label: t('sidebar.images') },
+        { key: '/category/video', icon: <VideoCameraOutlined />, label: t('sidebar.videos') },
+        { key: '/category/audio', icon: <AudioOutlined />, label: t('sidebar.audios') },
+        { key: '/category/document', icon: <FileTextOutlined />, label: t('sidebar.documents') },
       ],
+    },
+    {
+      key: '/gallery',
+      icon: <CameraOutlined />,
+      label: t('sidebar.gallery'),
     },
     {
       key: '/favorites',
       icon: <StarOutlined />,
-      label: '我的收藏',
+      label: t('sidebar.favorites'),
     },
     {
       key: '/tags',
       icon: <TagsOutlined />,
-      label: '标签管理',
+      label: t('sidebar.tags'),
     },
     {
       key: '/workspaces',
       icon: <TeamOutlined />,
-      label: '协作空间',
+      label: t('sidebar.workspaces'),
     },
     {
       key: '/shares',
       icon: <ShareAltOutlined />,
-      label: '我的分享',
+      label: t('sidebar.shares'),
     },
     {
       key: '/mounts',
       icon: <ApiOutlined />,
-      label: '数据源',
+      label: t('sidebar.mounts'),
+    },
+    {
+      key: '/activities',
+      icon: <ClockCircleOutlined />,
+      label: t('sidebar.activities'),
     },
     {
       key: '/trash',
       icon: <DeleteOutlined />,
-      label: '回收站',
+      label: t('sidebar.trash'),
     },
     ...(user?.role === 'admin'
-      ? [{ key: '/admin', icon: <SettingOutlined />, label: '管理后台' }]
+      ? [{ key: '/admin', icon: <SettingOutlined />, label: t('sidebar.admin') }]
       : []),
   ]
 
   const userMenuItems: MenuProps['items'] = [
-    { key: 'profile', icon: <UserOutlined />, label: '个人资料' },
+    { key: 'profile', icon: <UserOutlined />, label: t('auth.profile') },
     { type: 'divider' as const },
-    { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
+    { key: 'logout', icon: <LogoutOutlined />, label: t('auth.logout'), danger: true },
   ]
 
   const handleMenuClick = (info: { key: string }) => {
@@ -253,7 +269,7 @@ export default function Layout() {
           <Input
             value={searchKeyword}
             onChange={(e) => setSearchKeyword(e.target.value)}
-            placeholder="搜索文件..."
+            placeholder={t('files.searchPlaceholder')}
             prefix={<SearchOutlined />}
             allowClear
             style={{ width: isMobile ? 160 : 320 }}
@@ -264,6 +280,29 @@ export default function Layout() {
             {isMobile && (
               <Button type="text" icon={<MenuUnfoldOutlined />} onClick={() => setDrawerVisible(true)} />
             )}
+
+            {/* 语言切换 */}
+            <Select
+              value={i18n.language}
+              onChange={(lang) => { i18n.changeLanguage(lang); localStorage.setItem('language', lang) }}
+              size="small"
+              style={{ width: 80 }}
+              variant="borderless"
+              options={[
+                { value: 'zh-CN', label: '中文' },
+                { value: 'en-US', label: 'EN' },
+              ]}
+            />
+
+            {/* 主题切换 */}
+            <Button
+              type="text"
+              icon={<BulbOutlined />}
+              onClick={() => setMode(isDark ? 'light' : 'dark')}
+              title={isDark ? t('theme.light') : t('theme.dark')}
+              style={{ color: isDark ? '#faad14' : '#606266' }}
+            />
+
             <NotificationBell />
             <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenu }} placement="bottomRight">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
@@ -280,9 +319,12 @@ export default function Layout() {
         </Header>
 
         {/* 页面内容 */}
-        <Content style={{ background: '#f5f7fa', overflow: 'auto', padding: 24 }}>
+        <Content style={{ background: '#f5f7fa', overflow: 'auto', padding: isMobile ? '12px 12px 72px' : 24 }}>
           <Outlet />
         </Content>
+
+        {/* 移动端底部导航栏 */}
+        {isMobile && <MobileNav />}
       </AntLayout>
     </AntLayout>
   )

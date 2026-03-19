@@ -6,6 +6,7 @@ import { message } from 'antd'
 interface UserState {
   user: User | null
   token: string
+  refreshToken: string
   isLoggedIn: boolean
   login: (username: string, password: string) => Promise<boolean>
   register: (username: string, password: string, nickname?: string) => Promise<boolean>
@@ -16,14 +17,16 @@ interface UserState {
 export const useUserStore = create<UserState>((set, get) => ({
   user: null,
   token: localStorage.getItem('token') || '',
+  refreshToken: localStorage.getItem('refresh_token') || '',
   isLoggedIn: !!localStorage.getItem('token'),
 
   login: async (username: string, password: string) => {
     try {
       const res = await loginApi({ username, password })
-      const { token, user } = res.data!
-      set({ token, user, isLoggedIn: true })
+      const { token, refresh_token, user } = res.data!
+      set({ token, refreshToken: refresh_token, user, isLoggedIn: true })
       localStorage.setItem('token', token)
+      localStorage.setItem('refresh_token', refresh_token)
       message.success('登录成功')
       return true
     } catch {
@@ -34,9 +37,10 @@ export const useUserStore = create<UserState>((set, get) => ({
   register: async (username: string, password: string, nickname?: string) => {
     try {
       const res = await registerApi({ username, password, nickname })
-      const { token, user } = res.data!
-      set({ token, user, isLoggedIn: true })
+      const { token, refresh_token, user } = res.data!
+      set({ token, refreshToken: refresh_token, user, isLoggedIn: true })
       localStorage.setItem('token', token)
+      localStorage.setItem('refresh_token', refresh_token)
       message.success('注册成功')
       return true
     } catch {
@@ -56,8 +60,9 @@ export const useUserStore = create<UserState>((set, get) => ({
   },
 
   logout: () => {
-    set({ token: '', user: null, isLoggedIn: false })
+    set({ token: '', refreshToken: '', user: null, isLoggedIn: false })
     localStorage.removeItem('token')
+    localStorage.removeItem('refresh_token')
     window.location.href = '/login'
   },
 }))

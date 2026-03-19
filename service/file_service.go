@@ -1,10 +1,13 @@
 package service
 
 import (
+	"archive/zip"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"image/jpeg"
 	"io"
+	"log"
 	"mime/multipart"
 	"nowen-file/model"
 	"nowen-file/storage"
@@ -13,15 +16,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/disintegration/imaging"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 // FileService 文件服务
 type FileService struct {
-	storage   storage.Storage // 存储后端
-	thumbDir  string          // 缩略图目录
-	uploadDir string          // 上传目录（向下兼容）
+	storage       storage.Storage        // 存储后端
+	thumbDir      string                 // 缩略图目录
+	uploadDir     string                 // 上传目录（向下兼容）
+	searchService *FullTextSearchService // 全文搜索服务（可选）
 }
 
 // NewFileService 创建文件服务实例（兼容旧接口）
@@ -46,6 +51,11 @@ func NewFileServiceWithStorage(store storage.Storage, thumbDir string, uploadDir
 // GetStorage 获取存储后端
 func (s *FileService) GetStorage() storage.Storage {
 	return s.storage
+}
+
+// SetSearchService 设置全文搜索服务（用于上传文件后自动索引）
+func (s *FileService) SetSearchService(ss *FullTextSearchService) {
+	s.searchService = ss
 }
 
 // ==================== 文件夹操作 ====================
@@ -126,9 +136,9 @@ func (s *FileService) UploadFile(userID uint, parentID uint, header *multipart.F
 	instantUpload := false
 	var relPath string
 
-	if err := model.DB.Where("hash = ? AND user_id = ? AND is_trash = ?", fileHash, userID, false).
+	if err := model.DB.Where("hash = ? AND is_trash = ?", fileHash, false).
 		First(&existingFile).Error; err == nil {
-		// 找到相同哈希的文件，复用存储路径（秒传）
+		// 找到相同哈希的文件（全局去重），复用存储路径（秒传）
 		relPath = existingFile.StorePath
 		instantUpload = true
 	} else {
@@ -184,13 +194,18 @@ func (s *FileService) UploadFile(userID uint, parentID uint, header *multipart.F
 		go s.generateThumbnail(fileItem)
 	}
 
+	// 异步索引到全文搜索
+	if s.searchService != nil {
+		go s.searchService.IndexFile(fileItem)
+	}
+
 	return fileItem, nil
 }
 
 // CheckInstantUpload 检查文件是否可以秒传（根据哈希判断）
 func (s *FileService) CheckInstantUpload(userID uint, parentID uint, hash string, fileName string, size int64, mimeType string) (*model.FileItem, bool) {
 	var existingFile model.FileItem
-	if err := model.DB.Where("hash = ? AND user_id = ? AND is_trash = ?", hash, userID, false).
+	if err := model.DB.Where("hash = ? AND is_trash = ?", hash, false).
 		First(&existingFile).Error; err != nil {
 		return nil, false
 	}
@@ -344,6 +359,85 @@ func (s *FileService) MoveFile(userID uint, fileID uint, targetParentID uint) er
 	return model.DB.Model(&file).Update("parent_id", targetParentID).Error
 }
 
+// ==================== 文件/文件夹复制 ====================
+
+// CopyFile 复制文件或文件夹到目标目录
+func (s *FileService) CopyFile(userID uint, fileID uint, targetParentID uint) (*model.FileItem, error) {
+	var src model.FileItem
+	if err := model.DB.Where("id = ? AND user_id = ?", fileID, userID).First(&src).Error; err != nil {
+		return nil, errors.New("源文件不存在")
+	}
+
+	// 验证目标目录
+	if targetParentID != 0 {
+		var target model.FileItem
+		if err := model.DB.Where("id = ? AND user_id = ? AND is_dir = ?", targetParentID, userID, true).
+			First(&target).Error; err != nil {
+			return nil, errors.New("目标文件夹不存在")
+		}
+	}
+
+	// 不能复制到自身目录内
+	if src.IsDir && fileID == targetParentID {
+		return nil, errors.New("不能复制到自身目录")
+	}
+
+	if src.IsDir {
+		return s.copyFolder(userID, &src, targetParentID)
+	}
+	return s.copySingleFile(userID, &src, targetParentID)
+}
+
+// copySingleFile 复制单个文件（复用物理文件，仅创建新记录）
+func (s *FileService) copySingleFile(userID uint, src *model.FileItem, targetParentID uint) (*model.FileItem, error) {
+	newName := s.getUniqueFileName(userID, targetParentID, src.Name)
+	newFile := &model.FileItem{
+		UUID:        uuid.New().String(),
+		UserID:      userID,
+		ParentID:    targetParentID,
+		Name:        newName,
+		IsDir:       false,
+		Size:        src.Size,
+		MimeType:    src.MimeType,
+		StorePath:   src.StorePath, // 复用同一物理文件
+		Hash:        src.Hash,
+		IsEncrypted: src.IsEncrypted,
+	}
+	if err := model.DB.Create(newFile).Error; err != nil {
+		return nil, errors.New("复制文件失败")
+	}
+	return newFile, nil
+}
+
+// copyFolder 递归复制文件夹
+func (s *FileService) copyFolder(userID uint, src *model.FileItem, targetParentID uint) (*model.FileItem, error) {
+	newName := s.getUniqueFileName(userID, targetParentID, src.Name)
+	newFolder := &model.FileItem{
+		UUID:     uuid.New().String(),
+		UserID:   userID,
+		ParentID: targetParentID,
+		Name:     newName,
+		IsDir:    true,
+	}
+	if err := model.DB.Create(newFolder).Error; err != nil {
+		return nil, errors.New("复制文件夹失败")
+	}
+
+	// 递归复制子文件
+	var children []model.FileItem
+	model.DB.Where("user_id = ? AND parent_id = ? AND is_trash = ?", userID, src.ID, false).Find(&children)
+
+	for _, child := range children {
+		if child.IsDir {
+			s.copyFolder(userID, &child, newFolder.ID)
+		} else {
+			s.copySingleFile(userID, &child, newFolder.ID)
+		}
+	}
+
+	return newFolder, nil
+}
+
 // ==================== 回收站 ====================
 
 // TrashFile 将文件移入回收站
@@ -396,9 +490,16 @@ func (s *FileService) DeletePermanently(userID uint, fileID uint) error {
 
 	// 如果是文件，删除存储文件并更新存储使用量
 	if !file.IsDir {
-		s.storage.Delete(file.StorePath)
+		// 检查是否有其他记录引用同一物理文件（全局去重场景）
+		if s.canDeletePhysicalFile(file.StorePath, file.ID) {
+			s.storage.Delete(file.StorePath)
+		}
 		// 删除缩略图（如果有）
 		s.deleteThumbnail(&file)
+		// 从全文搜索索引中移除
+		if s.searchService != nil {
+			s.searchService.RemoveFile(file.ID)
+		}
 
 		model.DB.Model(&model.User{}).Where("id = ?", userID).
 			Update("storage_used", gorm.Expr("storage_used - ?", file.Size))
@@ -419,7 +520,10 @@ func (s *FileService) deleteChildrenPermanently(userID uint, parentID uint) {
 		if child.IsDir {
 			s.deleteChildrenPermanently(userID, child.ID)
 		} else {
-			s.storage.Delete(child.StorePath)
+			// 检查是否有其他记录引用同一物理文件
+			if s.canDeletePhysicalFile(child.StorePath, child.ID) {
+				s.storage.Delete(child.StorePath)
+			}
 			s.deleteThumbnail(&child)
 
 			model.DB.Model(&model.User{}).Where("id = ?", userID).
@@ -529,29 +633,45 @@ func (s *FileService) GetStorageStats(userID uint) (map[string]interface{}, erro
 
 // ==================== 缩略图 ====================
 
-// generateThumbnail 生成图片缩略图
+// generateThumbnail 生成图片缩略图（使用 imaging 库进行真正的图片缩放）
 func (s *FileService) generateThumbnail(file *model.FileItem) {
 	// 获取文件内容
 	reader, err := s.storage.Get(file.StorePath)
 	if err != nil {
+		log.Printf("[缩略图] 获取文件失败 %s: %v", file.UUID, err)
 		return
 	}
 	defer reader.Close()
+
+	// 使用 imaging 库解码图片
+	img, err := imaging.Decode(reader, imaging.AutoOrientation(true))
+	if err != nil {
+		log.Printf("[缩略图] 解码图片失败 %s: %v", file.UUID, err)
+		return
+	}
+
+	// 缩放为 200x200 的缩略图（保持纵横比，填充裁剪）
+	thumb := imaging.Fill(img, 200, 200, imaging.Center, imaging.Lanczos)
 
 	// 缩略图存储路径
 	thumbPath := s.getThumbPath(file.UUID)
 	os.MkdirAll(filepath.Dir(thumbPath), 0755)
 
-	// 读取原始图片数据，创建缩略图（简化版：直接拷贝小图片，大图片截取前部分）
-	// 这里使用简单的文件复制策略；生产环境可使用 imaging 库进行真正的缩放
 	dst, err := os.Create(thumbPath)
 	if err != nil {
+		log.Printf("[缩略图] 创建文件失败 %s: %v", file.UUID, err)
 		return
 	}
 	defer dst.Close()
 
-	// 限制缩略图大小为前 512KB（简化方案）
-	io.CopyN(dst, reader, 512*1024)
+	// 编码为 JPEG 格式，质量 85
+	if err := jpeg.Encode(dst, thumb, &jpeg.Options{Quality: 85}); err != nil {
+		log.Printf("[缩略图] 编码失败 %s: %v", file.UUID, err)
+		os.Remove(thumbPath)
+		return
+	}
+
+	log.Printf("[缩略图] 生成成功: %s", file.UUID)
 }
 
 // GetThumbnailPath 获取缩略图路径
@@ -576,6 +696,20 @@ func (s *FileService) deleteThumbnail(file *model.FileItem) {
 }
 
 // ==================== 辅助函数 ====================
+
+// canDeletePhysicalFile 检查是否可以安全删除物理文件（无其他记录引用同一 StorePath）
+func (s *FileService) canDeletePhysicalFile(storePath string, excludeID uint) bool {
+	if storePath == "" {
+		return false
+	}
+	var count int64
+	// 查询是否有其他文件记录（不含当前待删除的）引用同一存储路径
+	model.DB.Model(&model.FileItem{}).Where("store_path = ? AND id != ?", storePath, excludeID).Count(&count)
+	// 同时检查版本历史中是否有引用
+	var versionCount int64
+	model.DB.Model(&model.FileVersion{}).Where("store_path = ?", storePath).Count(&versionCount)
+	return count == 0 && versionCount == 0
+}
 
 // isImageMime 判断 MIME 类型是否为图片
 func isImageMime(mimeType string) bool {
@@ -669,6 +803,88 @@ func (s *FileService) GetFileByID(userID uint, fileID uint) (*model.FileItem, er
 		return nil, errors.New("文件不存在")
 	}
 	return &file, nil
+}
+
+// ==================== 批量打包下载 ====================
+
+// BatchDownloadToZip 将多个文件/文件夹打包为 ZIP 写入 writer
+func (s *FileService) BatchDownloadToZip(userID uint, fileIDs []uint, w io.Writer) error {
+	zipWriter := zip.NewWriter(w)
+	defer zipWriter.Close()
+
+	for _, id := range fileIDs {
+		var file model.FileItem
+		if err := model.DB.Where("id = ? AND user_id = ? AND is_trash = ?", id, userID, false).First(&file).Error; err != nil {
+			continue
+		}
+		if file.IsDir {
+			s.addFolderToZip(zipWriter, userID, &file, file.Name)
+		} else {
+			s.addFileToZip(zipWriter, &file, file.Name)
+		}
+	}
+
+	return nil
+}
+
+// addFileToZip 将单个文件添加到 ZIP
+func (s *FileService) addFileToZip(zw *zip.Writer, file *model.FileItem, pathInZip string) {
+	reader, err := s.storage.Get(file.StorePath)
+	if err != nil {
+		log.Printf("[批量下载] 读取文件失败: %s, err: %v", file.Name, err)
+		return
+	}
+	defer reader.Close()
+
+	fw, err := zw.Create(pathInZip)
+	if err != nil {
+		log.Printf("[批量下载] 创建ZIP条目失败: %s", pathInZip)
+		return
+	}
+	io.Copy(fw, reader)
+}
+
+// addFolderToZip 递归将文件夹添加到 ZIP
+func (s *FileService) addFolderToZip(zw *zip.Writer, userID uint, folder *model.FileItem, basePath string) {
+	var children []model.FileItem
+	model.DB.Where("user_id = ? AND parent_id = ? AND is_trash = ?", userID, folder.ID, false).Find(&children)
+
+	if len(children) == 0 {
+		// 空文件夹也要创建目录条目
+		zw.Create(basePath + "/")
+		return
+	}
+
+	for _, child := range children {
+		childPath := basePath + "/" + child.Name
+		if child.IsDir {
+			s.addFolderToZip(zw, userID, &child, childPath)
+		} else {
+			s.addFileToZip(zw, &child, childPath)
+		}
+	}
+}
+
+// ==================== 回收站自动清理 ====================
+
+// CleanExpiredTrash 清理超过指定天数的回收站文件
+func (s *FileService) CleanExpiredTrash(days int) int {
+	expireTime := time.Now().AddDate(0, 0, -days)
+	var trashedFiles []model.FileItem
+	model.DB.Where("is_trash = ? AND trashed_at IS NOT NULL AND trashed_at < ?", true, expireTime).Find(&trashedFiles)
+
+	deleted := 0
+	for _, file := range trashedFiles {
+		if err := s.DeletePermanently(file.UserID, file.ID); err == nil {
+			deleted++
+			log.Printf("[回收站清理] 永久删除: %s (用户: %d)", file.Name, file.UserID)
+		}
+	}
+
+	if deleted > 0 {
+		log.Printf("[回收站清理] 共清理 %d 个过期文件（超过 %d 天）", deleted, days)
+	}
+	return deleted
 }
 
 // ==================== 在线编辑 ====================

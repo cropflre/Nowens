@@ -22,6 +22,12 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+// RefreshClaims Refresh Token 声明
+type RefreshClaims struct {
+	UserID uint `json:"user_id"`
+	jwt.RegisteredClaims
+}
+
 // NewAuthMiddleware 创建认证中间件实例
 func NewAuthMiddleware(secret string) *AuthMiddleware {
 	return &AuthMiddleware{secret: []byte(secret)}
@@ -75,19 +81,59 @@ func (m *AuthMiddleware) Auth() gin.HandlerFunc {
 	}
 }
 
-// GenerateToken 生成 JWT Token
+// GenerateToken 生成 Access Token（15分钟有效）
 func (m *AuthMiddleware) GenerateToken(userID uint, username, role string) (string, error) {
 	claims := &Claims{
 		UserID:   userID,
 		Username: username,
 		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().AddDate(0, 0, 7)), // 7天过期
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(m.secret)
+}
+
+// GenerateRefreshToken 生成 Refresh Token（7天有效）
+func (m *AuthMiddleware) GenerateRefreshToken(userID uint) (string, error) {
+	claims := &RefreshClaims{
+		UserID: userID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().AddDate(0, 0, 7)),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(m.secret)
+}
+
+// ValidateRefreshToken 验证 Refresh Token
+func (m *AuthMiddleware) ValidateRefreshToken(tokenStr string) (*RefreshClaims, error) {
+	claims := &RefreshClaims{}
+	token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
+		return m.secret, nil
+	})
+	if err != nil || !token.Valid {
+		return nil, err
+	}
+	return claims, nil
+}
+
+// GenerateTokenPair 生成 Token 对（access_token + refresh_token）
+func (m *AuthMiddleware) GenerateTokenPair(userID uint, username, role string) (string, string, error) {
+	accessToken, err := m.GenerateToken(userID, username, role)
+	if err != nil {
+		return "", "", err
+	}
+
+	refreshToken, err := m.GenerateRefreshToken(userID)
+	if err != nil {
+		return "", "", err
+	}
+
+	return accessToken, refreshToken, nil
 }
 
 // AdminOnly 管理员权限中间件

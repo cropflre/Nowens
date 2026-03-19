@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useUserStore } from '@/stores/user'
+import ErrorBoundary from '@/components/ErrorBoundary'
 import Layout from '@/views/Layout'
 import Login from '@/views/Login'
 import Files from '@/views/Files'
@@ -16,6 +17,11 @@ import Tags from '@/views/Tags'
 import Dashboard from '@/views/Dashboard'
 import FileEditor from '@/views/FileEditor'
 import Workspaces from '@/views/Workspaces'
+import Gallery from '@/views/Gallery'
+import Activities from '@/views/Activities'
+
+// 导入 i18n 配置
+import '@/i18n'
 
 // 路由守卫组件
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -34,31 +40,35 @@ export default function App() {
   }, [])
 
   return (
-    <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route path="/share/:code" element={<ShareView />} />
-      <Route
-        path="/"
-        element={
-          <RequireAuth>
-            <Layout />
-          </RequireAuth>
-        }
-      >
-        <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<Dashboard />} />
-        <Route path="files" element={<Files />} />
-        <Route path="category/:type" element={<Category />} />
-        <Route path="trash" element={<Trash />} />
-        <Route path="shares" element={<MyShares />} />
-        <Route path="favorites" element={<Favorites />} />
-        <Route path="tags" element={<Tags />} />
-        <Route path="workspaces" element={<Workspaces />} />
-        <Route path="mounts" element={<Mounts />} />
-        <Route path="mounts/:id/browse" element={<MountBrowse />} />
-        <Route path="editor" element={<FileEditor />} />
-        <Route path="admin" element={<Admin />} />
-      </Route>
-    </Routes>
+    <ErrorBoundary>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/share/:code" element={<ShareView />} />
+        <Route
+          path="/"
+          element={
+            <RequireAuth>
+              <Layout />
+            </RequireAuth>
+          }
+        >
+          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route path="dashboard" element={<Dashboard />} />
+          <Route path="files" element={<Files />} />
+          <Route path="category/:type" element={<Category />} />
+          <Route path="trash" element={<Trash />} />
+          <Route path="shares" element={<MyShares />} />
+          <Route path="favorites" element={<Favorites />} />
+          <Route path="tags" element={<Tags />} />
+          <Route path="workspaces" element={<Workspaces />} />
+          <Route path="gallery" element={<Gallery />} />
+          <Route path="activities" element={<Activities />} />
+          <Route path="mounts" element={<Mounts />} />
+          <Route path="mounts/:id/browse" element={<MountBrowse />} />
+          <Route path="editor" element={<FileEditor />} />
+          <Route path="admin" element={<Admin />} />
+        </Route>
+      </Routes>
+    </ErrorBoundary>
   )
 }

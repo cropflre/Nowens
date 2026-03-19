@@ -29,6 +29,27 @@ export interface FileItem {
   updated_at: string
 }
 
+// 分片上传初始化响应
+export interface ChunkUploadInit {
+  upload_id: string
+  total_chunks?: number
+  chunk_size?: number
+  instant: boolean
+}
+
+// 分片上传状态响应
+export interface ChunkUploadStatus {
+  upload: {
+    upload_id: string
+    file_name: string
+    file_size: number
+    total_chunks: number
+    status: string
+  }
+  missing_chunks: number[]
+  progress: number
+}
+
 // 分享链接类型
 export interface ShareLink {
   id: number
@@ -52,6 +73,7 @@ export interface ApiResponse<T = any> {
 export interface AuthResponse {
   user: User
   token: string
+  refresh_token: string
 }
 
 // 文件列表响应

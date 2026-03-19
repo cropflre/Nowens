@@ -27,7 +27,7 @@ func InitDB(cfg *config.Config) error {
 	}
 
 	// 自动迁移
-	if err := DB.AutoMigrate(&User{}, &FileItem{}, &ShareLink{}, &FileVersion{}, &AuditLog{}, &MountPoint{}, &IndexedFile{}, &Favorite{}, &Tag{}, &FileTag{}, &Notification{}, &SyncSchedule{}, &Workspace{}, &WorkspaceMember{}, &FolderPermission{}); err != nil {
+	if err := DB.AutoMigrate(&User{}, &FileItem{}, &ShareLink{}, &FileVersion{}, &AuditLog{}, &MountPoint{}, &IndexedFile{}, &Favorite{}, &Tag{}, &FileTag{}, &Notification{}, &SyncSchedule{}, &Workspace{}, &WorkspaceMember{}, &FolderPermission{}, &ChunkUpload{}, &Comment{}, &Activity{}); err != nil {
 		return err
 	}
 
@@ -247,4 +247,52 @@ type SyncSchedule struct {
 	NextRun   *time.Time `json:"next_run,omitempty"`                   // 下次执行时间
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// ==================== 文件评论模型 ====================
+
+// Comment 文件评论/备注
+type Comment struct {
+	ID        uint      `gorm:"primarykey" json:"id"`
+	FileID    uint      `gorm:"index;not null" json:"file_id"`     // 关联文件
+	UserID    uint      `gorm:"index;not null" json:"user_id"`     // 评论者
+	Username  string    `gorm:"size:64" json:"username"`           // 评论者用户名
+	Content   string    `gorm:"size:2048;not null" json:"content"` // 评论内容
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ==================== 操作活动流模型 ====================
+
+// Activity 用户操作活动记录（更丰富的展示信息）
+type Activity struct {
+	ID         uint      `gorm:"primarykey" json:"id"`
+	UserID     uint      `gorm:"index;not null" json:"user_id"`        // 操作者
+	Username   string    `gorm:"size:64" json:"username"`              // 操作者用户名
+	Action     string    `gorm:"size:32;not null;index" json:"action"` // 操作类型: upload/download/delete/share/rename/move/comment/encrypt 等
+	TargetType string    `gorm:"size:32" json:"target_type"`           // 目标类型: file/folder/share/comment
+	TargetID   uint      `gorm:"index" json:"target_id"`               // 目标 ID
+	TargetName string    `gorm:"size:512" json:"target_name"`          // 目标名称（文件名等）
+	Detail     string    `gorm:"size:1024" json:"detail,omitempty"`    // 额外详情
+	CreatedAt  time.Time `gorm:"index" json:"created_at"`
+}
+
+// ==================== 分片上传模型 ====================
+
+// ChunkUpload 分片上传会话
+type ChunkUpload struct {
+	ID             uint      `gorm:"primarykey" json:"id"`
+	UploadID       string    `gorm:"uniqueIndex;size:64;not null" json:"upload_id"` // 上传会话唯一标识
+	UserID         uint      `gorm:"index;not null" json:"user_id"`                 // 上传者
+	ParentID       uint      `gorm:"default:0" json:"parent_id"`                    // 目标文件夹
+	FileName       string    `gorm:"size:512;not null" json:"file_name"`            // 文件名
+	FileSize       int64     `gorm:"not null" json:"file_size"`                     // 文件总大小
+	ChunkSize      int64     `gorm:"not null" json:"chunk_size"`                    // 每片大小
+	TotalChunks    int       `gorm:"not null" json:"total_chunks"`                  // 总分片数
+	UploadedChunks string    `gorm:"size:4096" json:"uploaded_chunks"`              // 已上传分片（逗号分隔）
+	MimeType       string    `gorm:"size:256" json:"mime_type"`                     // MIME 类型
+	Hash           string    `gorm:"size:64" json:"hash"`                           // 完整文件哈希（可选，用于秒传）
+	Status         string    `gorm:"size:16;default:uploading" json:"status"`       // uploading / merging / done / failed
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }

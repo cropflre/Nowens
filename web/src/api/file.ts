@@ -1,5 +1,5 @@
 import http from '@/utils/http'
-import type { ApiResponse, FileItem, FileListData, StorageStats, PreviewInfo, FileVersion } from '@/types'
+import type { ApiResponse, FileItem, FileListData, StorageStats, PreviewInfo, FileVersion, ChunkUploadInit, ChunkUploadStatus } from '@/types'
 
 // 获取文件列表
 export function getFileList(params: { parent_id?: number; sort?: string; order?: string }) {
@@ -48,6 +48,11 @@ export function renameFile(data: { file_id: number; new_name: string }) {
 // 移动文件
 export function moveFile(data: { file_id: number; target_id: number }) {
   return http.put<any, ApiResponse>('/files/move', data)
+}
+
+// 复制文件/文件夹
+export function copyFile(data: { file_id: number; target_id: number }) {
+  return http.post<any, ApiResponse<FileItem>>('/files/copy', data)
 }
 
 // 移入回收站
@@ -111,6 +116,113 @@ export function batchMove(fileIds: number[], targetId: number) {
 // 批量永久删除
 export function batchDelete(fileIds: number[]) {
   return http.post<any, ApiResponse>('/files/batch/delete', { file_ids: fileIds })
+}
+
+// 批量打包下载（ZIP）
+export function batchDownload(fileIds: number[]) {
+  const token = localStorage.getItem('token')
+  return http.post('/files/batch/download', { file_ids: fileIds }, {
+    responseType: 'blob',
+    timeout: 0, // 不限超时
+    headers: { Authorization: `Bearer ${token}` },
+    // 跳过响应拦截器中的 JSON 解析
+    transformResponse: [(data: any) => data],
+  })
+}
+
+// ==================== 分片上传 ====================
+
+// 默认分片大小: 5MB
+export const CHUNK_SIZE = 5 * 1024 * 1024
+
+// 初始化分片上传
+export function initChunkUpload(data: {
+  parent_id: number
+  file_name: string
+  file_size: number
+  chunk_size: number
+  mime_type: string
+  hash?: string
+}) {
+  return http.post<any, ApiResponse<ChunkUploadInit>>('/files/chunk/init', data)
+}
+
+// 上传单个分片
+export function uploadChunk(uploadId: string, chunkIndex: number, chunk: Blob, onProgress?: (percent: number) => void) {
+  const formData = new FormData()
+  formData.append('upload_id', uploadId)
+  formData.append('chunk_index', String(chunkIndex))
+  formData.append('chunk', chunk)
+
+  return http.post<any, ApiResponse>('/files/chunk/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 0,
+    onUploadProgress: (event) => {
+      if (event.total && onProgress) {
+        onProgress(Math.round((event.loaded / event.total) * 100))
+      }
+    },
+  })
+}
+
+// 合并分片
+export function mergeChunks(uploadId: string) {
+  return http.post<any, ApiResponse<FileItem>>('/files/chunk/merge', { upload_id: uploadId })
+}
+
+// 查询分片上传进度
+export function getChunkUploadStatus(uploadId: string) {
+  return http.get<any, ApiResponse<ChunkUploadStatus>>('/files/chunk/status', { params: { upload_id: uploadId } })
+}
+
+// 智能上传：小文件直传，大文件分片
+export async function smartUpload(
+  parentId: number,
+  file: File,
+  onProgress?: (percent: number) => void
+): Promise<ApiResponse<FileItem>> {
+  // 小于 10MB 使用普通上传
+  if (file.size < 10 * 1024 * 1024) {
+    return uploadFile(parentId, file, onProgress)
+  }
+
+  // 大文件使用分片上传
+  const chunkSize = CHUNK_SIZE
+  const totalChunks = Math.ceil(file.size / chunkSize)
+
+  // 1. 初始化
+  const initRes = await initChunkUpload({
+    parent_id: parentId,
+    file_name: file.name,
+    file_size: file.size,
+    chunk_size: chunkSize,
+    mime_type: file.type || 'application/octet-stream',
+  })
+
+  if (initRes.data?.instant) {
+    onProgress?.(100)
+    return initRes as any
+  }
+
+  const uploadId = initRes.data!.upload_id
+
+  // 2. 逐片上传
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * chunkSize
+    const end = Math.min(start + chunkSize, file.size)
+    const chunk = file.slice(start, end)
+
+    await uploadChunk(uploadId, i, chunk)
+
+    // 更新总进度
+    const overallPercent = Math.round(((i + 1) / totalChunks) * 95) // 95% 给分片上传
+    onProgress?.(overallPercent)
+  }
+
+  // 3. 合并
+  const mergeRes = await mergeChunks(uploadId)
+  onProgress?.(100)
+  return mergeRes
 }
 
 // ==================== 文件版本 ====================

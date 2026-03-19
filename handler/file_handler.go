@@ -3,11 +3,15 @@ package handler
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"nowen-file/model"
 	"nowen-file/service"
 	"nowen-file/storage"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -181,12 +185,13 @@ func (h *FileHandler) Preview(c *gin.Context) {
 	// 设置缓存头（预览内容可以缓存）
 	c.Header("Cache-Control", "private, max-age=3600")
 
-	// 尝试本地路径
+	// 尝试本地路径（支持 Range 请求，视频流式播放）
 	filePath := h.fileService.GetFilePath(file)
 	if filePath != "" && fileExists(filePath) {
 		c.Header("Content-Type", file.MimeType)
 		c.Header("Content-Disposition", "inline; filename=\""+file.Name+"\"")
-		c.File(filePath)
+		// 使用 http.ServeFile 自动支持 Range 请求（视频/音频流式播放）
+		http.ServeFile(c.Writer, c.Request, filePath)
 		return
 	}
 
@@ -200,6 +205,8 @@ func (h *FileHandler) Preview(c *gin.Context) {
 
 	c.Header("Content-Type", file.MimeType)
 	c.Header("Content-Disposition", "inline; filename=\""+file.Name+"\"")
+	c.Header("Accept-Ranges", "bytes")
+	c.Header("Content-Length", strconv.FormatInt(file.Size, 10))
 	io.Copy(c.Writer, reader)
 }
 
@@ -292,6 +299,29 @@ func (h *FileHandler) Move(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "移动成功"})
+}
+
+// Copy 复制文件/文件夹
+// POST /api/files/copy
+func (h *FileHandler) Copy(c *gin.Context) {
+	userID := c.GetUint("user_id")
+
+	var req struct {
+		FileID   uint `json:"file_id" binding:"required"`
+		TargetID uint `json:"target_id"` // 0 表示根目录
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "参数错误"})
+		return
+	}
+
+	newFile, err := h.fileService.CopyFile(userID, req.FileID, req.TargetID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "复制成功", "data": newFile})
 }
 
 // Trash 移入回收站
@@ -621,6 +651,49 @@ func (h *FileHandler) BatchDelete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": fmt.Sprintf("已永久删除 %d 个文件", count)})
+}
+
+// BatchDownload 批量打包下载（ZIP）
+// POST /api/files/batch/download
+func (h *FileHandler) BatchDownload(c *gin.Context) {
+	userID := c.GetUint("user_id")
+
+	var req struct {
+		FileIDs []uint `json:"file_ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "参数错误"})
+		return
+	}
+
+	if len(req.FileIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请选择要下载的文件"})
+		return
+	}
+
+	// 生成文件名
+	var zipName string
+	if len(req.FileIDs) == 1 {
+		var file model.FileItem
+		if err := model.DB.Where("id = ? AND user_id = ?", req.FileIDs[0], userID).First(&file).Error; err == nil {
+			if file.IsDir {
+				zipName = file.Name + ".zip"
+			} else {
+				zipName = strings.TrimSuffix(file.Name, filepath.Ext(file.Name)) + ".zip"
+			}
+		}
+	}
+	if zipName == "" {
+		zipName = fmt.Sprintf("批量下载_%d个文件.zip", len(req.FileIDs))
+	}
+
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", "attachment; filename=\""+zipName+"\"")
+	c.Header("Transfer-Encoding", "chunked")
+
+	if err := h.fileService.BatchDownloadToZip(userID, req.FileIDs, c.Writer); err != nil {
+		log.Printf("[批量下载] 失败: %v", err)
+	}
 }
 
 // fileExists 检查文件是否存在
