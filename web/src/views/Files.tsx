@@ -420,7 +420,7 @@ export default function Files() {
     } catch {}
   }
 
-  const handleAction = (action: string, file: FileItem) => {
+  const handleAction = async (action: string, file: FileItem) => {
     if (action === 'rename') {
       setRenameTarget(file)
       setRenameValue(file.name)
