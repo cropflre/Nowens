@@ -19,6 +19,9 @@ import FileEditor from '@/views/FileEditor'
 import Workspaces from '@/views/Workspaces'
 import Gallery from '@/views/Gallery'
 import Activities from '@/views/Activities'
+import DedupDashboard from '@/views/DedupDashboard'
+import WebhookManage from '@/views/WebhookManage'
+import MFASetting from '@/views/MFASetting'
 
 // 导入 i18n 配置
 import '@/i18n'
@@ -63,6 +66,9 @@ export default function App() {
           <Route path="workspaces" element={<Workspaces />} />
           <Route path="gallery" element={<Gallery />} />
           <Route path="activities" element={<Activities />} />
+          <Route path="dedup" element={<DedupDashboard />} />
+          <Route path="webhooks" element={<WebhookManage />} />
+          <Route path="mfa" element={<MFASetting />} />
           <Route path="mounts" element={<Mounts />} />
           <Route path="mounts/:id/browse" element={<MountBrowse />} />
           <Route path="editor" element={<FileEditor />} />

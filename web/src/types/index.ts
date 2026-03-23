@@ -24,6 +24,8 @@ export interface FileItem {
   hash: string
   is_trash: boolean
   is_encrypted: boolean
+  is_starred: boolean
+  is_archived: boolean
   trashed_at?: string
   created_at: string
   updated_at: string
@@ -336,4 +338,48 @@ export interface AgentFileInfo {
   is_dir: boolean
   size: number
   mod_time: string
+}
+
+// ==================== 文件去重类型 ====================
+
+export interface DuplicateGroup {
+  hash: string
+  size: number
+  count: number
+  files: FileItem[]
+  wasted_size: number
+}
+
+export interface DedupStats {
+  total_duplicate_groups: number
+  total_duplicate_files: number
+  total_wasted_size: number
+  groups: DuplicateGroup[]
+}
+
+// ==================== Webhook 类型 ====================
+
+export interface WebhookConfig {
+  id: number
+  user_id: number
+  name: string
+  url: string
+  events: string
+  platform: 'custom' | 'wechat_work' | 'dingtalk' | 'slack' | 'feishu'
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+// ==================== MFA 类型 ====================
+
+export interface MFAStatus {
+  enabled: boolean
+  setup: boolean
+  created_at?: string
+}
+
+export interface MFASetupResponse {
+  secret: string
+  qrcode_url: string
 }

@@ -17,6 +17,7 @@ import { formatFileSize, formatDate, getFileIcon, getFileColor } from '@/utils'
 import {
   createFolder, uploadFile, renameFile, trashFile,
   searchFiles, getDownloadUrl, batchTrash, batchDownload, smartUpload, copyFile,
+  toggleStar, toggleArchive, autoClassifyFile, uploadFileWithPath,
 } from '@/api/file'
 import { createShare } from '@/api/share'
 import { addFavorite, removeFavorite, checkFavorite } from '@/api/favorite'
@@ -320,7 +321,7 @@ export default function Files() {
     e.target.value = ''
   }
 
-  // 通用上传处理（支持普通上传和分片上传）
+  // 通用上传处理（支持普通上传、分片上传和文件夹上传）
   const processUploadFiles = async (files: File[]) => {
     const tasks: UploadTask[] = []
     for (const file of files) {
@@ -331,16 +332,29 @@ export default function Files() {
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
+      const relativePath = (file as any).webkitRelativePath || ''
       try {
-        // 使用智能上传（小文件直传，大文件分片）
-        await smartUpload(fileStore.currentParentId, file, (percent) => {
-          setUploadTasks((prev) => {
-            const updated = [...prev]
-            const idx = updated.findIndex((t) => t.name === file.name && t.status === 'uploading')
-            if (idx >= 0) updated[idx] = { ...updated[idx], percent }
-            return updated
+        if (relativePath && relativePath.includes('/')) {
+          // 文件夹上传：使用带路径的上传接口
+          await uploadFileWithPath(fileStore.currentParentId, file, relativePath, (percent) => {
+            setUploadTasks((prev) => {
+              const updated = [...prev]
+              const idx = updated.findIndex((t) => t.name === file.name && t.status === 'uploading')
+              if (idx >= 0) updated[idx] = { ...updated[idx], percent }
+              return updated
+            })
           })
-        })
+        } else {
+          // 普通上传：使用智能上传（小文件直传，大文件分片）
+          await smartUpload(fileStore.currentParentId, file, (percent) => {
+            setUploadTasks((prev) => {
+              const updated = [...prev]
+              const idx = updated.findIndex((t) => t.name === file.name && t.status === 'uploading')
+              if (idx >= 0) updated[idx] = { ...updated[idx], percent }
+              return updated
+            })
+          })
+        }
         setUploadTasks((prev) => {
           const updated = [...prev]
           const idx = updated.findIndex((t) => t.name === file.name && t.status === 'uploading')
@@ -465,6 +479,31 @@ export default function Files() {
       setEncryptAction('decrypt')
       setEncryptPassword('')
       setShowEncrypt(true)
+    } else if (action === 'star') {
+      try {
+        const res = await toggleStar(file.id)
+        if (res.code === 0) {
+          message.success(res.data?.is_starred ? '已添加星标' : '已取消星标')
+          fileStore.loadFiles()
+        }
+      } catch {}
+    } else if (action === 'archive') {
+      try {
+        const res = await toggleArchive(file.id)
+        if (res.code === 0) {
+          message.success(res.data?.is_archived ? '已归档' : '已取消归档')
+          fileStore.loadFiles()
+        }
+      } catch {}
+    } else if (action === 'classify') {
+      try {
+        const res = await autoClassifyFile(file.id)
+        if (res.code === 0 && res.data?.tags?.length) {
+          message.success(`已自动分类：${res.data.tags.join('、')}`)
+        } else {
+          message.info('未能自动识别文件类型')
+        }
+      } catch {}
     }
   }
 
@@ -556,6 +595,9 @@ export default function Files() {
                 { key: 'comment', label: '评论' },
                 { key: 'favorite', label: favoritedIds.has(record.id) ? '取消收藏' : '收藏', icon: favoritedIds.has(record.id) ? <StarFilled style={{ color: '#faad14' }} /> : <StarOutlined /> },
                 { key: 'tag', label: '管理标签', icon: <TagsOutlined /> },
+                ...(!record.is_dir ? [{ key: 'classify', label: 'AI 智能分类', icon: <TagsOutlined /> }] : []),
+                { key: 'star', label: record.is_starred ? '取消星标' : '添加星标', icon: record.is_starred ? <StarFilled style={{ color: '#faad14' }} /> : <StarOutlined /> },
+                { key: 'archive', label: record.is_archived ? '取消归档' : '归档' },
                 { type: 'divider' as const },
                 { key: 'trash', label: <span style={{ color: '#f5222d' }}>删除</span> },
               ],

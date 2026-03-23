@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Form, Input, Button } from 'antd'
-import { FolderOpenOutlined, UserOutlined, LockOutlined, SmileOutlined } from '@ant-design/icons'
+import { Form, Input, Button, Modal } from 'antd'
+import { FolderOpenOutlined, UserOutlined, LockOutlined, SmileOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import { useUserStore } from '@/stores/user'
 
 export default function Login() {
@@ -10,17 +10,40 @@ export default function Login() {
   const [isRegister, setIsRegister] = useState(false)
   const [loading, setLoading] = useState(false)
   const [form] = Form.useForm()
+  const [mfaModalOpen, setMfaModalOpen] = useState(false)
+  const [mfaCode, setMfaCode] = useState('')
+  const [pendingCredentials, setPendingCredentials] = useState<{ username: string; password: string } | null>(null)
 
   const handleSubmit = async (values: any) => {
     setLoading(true)
     try {
-      let success: boolean
+      let success: boolean | 'mfa_required'
       if (isRegister) {
         success = await register(values.username, values.password, values.nickname)
       } else {
         success = await login(values.username, values.password)
       }
-      if (success) {
+      if (success === 'mfa_required') {
+        // 需要 MFA 验证码
+        setPendingCredentials({ username: values.username, password: values.password })
+        setMfaModalOpen(true)
+        setMfaCode('')
+      } else if (success === true) {
+        navigate('/')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleMFASubmit = async () => {
+    if (!pendingCredentials || mfaCode.length !== 6) return
+    setLoading(true)
+    try {
+      const success = await login(pendingCredentials.username, pendingCredentials.password, mfaCode)
+      if (success === true) {
+        setMfaModalOpen(false)
+        setPendingCredentials(null)
         navigate('/')
       }
     } finally {
@@ -94,6 +117,32 @@ export default function Login() {
           </Button>
         </div>
       </div>
+
+      {/* MFA 验证码弹窗 */}
+      <Modal
+        title={
+          <span><SafetyCertificateOutlined /> 多因素认证验证</span>
+        }
+        open={mfaModalOpen}
+        onOk={handleMFASubmit}
+        onCancel={() => { setMfaModalOpen(false); setPendingCredentials(null) }}
+        okText="验证"
+        cancelText="取消"
+        confirmLoading={loading}
+      >
+        <p style={{ marginBottom: 16, color: '#666' }}>
+          您的账号已启用多因素认证，请输入认证器 App 上显示的 6 位验证码：
+        </p>
+        <Input
+          placeholder="000000"
+          maxLength={6}
+          value={mfaCode}
+          onChange={e => setMfaCode(e.target.value.replace(/\D/g, ''))}
+          style={{ fontSize: 24, textAlign: 'center', letterSpacing: 8 }}
+          onPressEnter={handleMFASubmit}
+          autoFocus
+        />
+      </Modal>
     </div>
   )
 }

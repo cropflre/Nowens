@@ -7,7 +7,7 @@ export function register(data: { username: string; password: string; nickname?: 
 }
 
 // 用户登录
-export function login(data: { username: string; password: string }) {
+export function login(data: { username: string; password: string; mfa_code?: string }) {
   return http.post<any, ApiResponse<AuthResponse>>('/auth/login', data)
 }
 

@@ -24,4 +24,9 @@ type Storage interface {
 
 	// Type 返回存储类型名称
 	Type() string
+
+	// GetPresignedURL 获取预签名的下载/上传 URL（仅 S3 类存储有效，本地存储返回空字符串和 nil）
+	// operation: "GET" 下载, "PUT" 上传
+	// expiry: URL 有效期
+	GetPresignedURL(key string, operation string, expiry int) (string, error)
 }

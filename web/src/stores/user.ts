@@ -8,7 +8,7 @@ interface UserState {
   token: string
   refreshToken: string
   isLoggedIn: boolean
-  login: (username: string, password: string) => Promise<boolean>
+  login: (username: string, password: string, mfaCode?: string) => Promise<boolean | 'mfa_required'>
   register: (username: string, password: string, nickname?: string) => Promise<boolean>
   fetchProfile: () => Promise<void>
   logout: () => void
@@ -20,9 +20,13 @@ export const useUserStore = create<UserState>((set, get) => ({
   refreshToken: localStorage.getItem('refresh_token') || '',
   isLoggedIn: !!localStorage.getItem('token'),
 
-  login: async (username: string, password: string) => {
+  login: async (username: string, password: string, mfaCode?: string) => {
     try {
-      const res = await loginApi({ username, password })
+      const res = await loginApi({ username, password, mfa_code: mfaCode || '' })
+      if (res.code === 1001) {
+        // 需要 MFA 验证码
+        return 'mfa_required'
+      }
       const { token, refresh_token, user } = res.data!
       set({ token, refreshToken: refresh_token, user, isLoggedIn: true })
       localStorage.setItem('token', token)

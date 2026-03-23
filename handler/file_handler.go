@@ -696,6 +696,253 @@ func (h *FileHandler) BatchDownload(c *gin.Context) {
 	}
 }
 
+// ==================== 星标/归档 ====================
+
+// ToggleStar 切换星标状态
+// POST /api/files/star
+func (h *FileHandler) ToggleStar(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	var req struct {
+		FileID uint `json:"file_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "参数错误"})
+		return
+	}
+	starred, err := h.fileService.ToggleStar(userID, req.FileID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+		return
+	}
+	msg := "已添加星标"
+	if !starred {
+		msg = "已取消星标"
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": msg, "data": gin.H{"is_starred": starred}})
+}
+
+// ToggleArchive 切换归档状态
+// POST /api/files/archive
+func (h *FileHandler) ToggleArchive(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	var req struct {
+		FileID uint `json:"file_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "参数错误"})
+		return
+	}
+	archived, err := h.fileService.ToggleArchive(userID, req.FileID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+		return
+	}
+	msg := "已归档"
+	if !archived {
+		msg = "已取消归档"
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": msg, "data": gin.H{"is_archived": archived}})
+}
+
+// ListStarred 获取星标文件列表
+// GET /api/files/starred
+func (h *FileHandler) ListStarred(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	files, err := h.fileService.ListStarred(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": files})
+}
+
+// ListArchived 获取归档文件列表
+// GET /api/files/archived
+func (h *FileHandler) ListArchived(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	files, err := h.fileService.ListArchived(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": files})
+}
+
+// ==================== 批量恢复 ====================
+
+// BatchRestore 批量恢复回收站文件
+// POST /api/files/batch/restore
+func (h *FileHandler) BatchRestore(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	var req struct {
+		FileIDs []uint `json:"file_ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "参数错误"})
+		return
+	}
+	count, err := h.fileService.BatchRestore(userID, req.FileIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": fmt.Sprintf("已恢复 %d 个文件", count)})
+}
+
+// ==================== AI 自动分类 ====================
+
+// AutoClassify 自动分类单个文件
+// POST /api/files/classify
+func (h *FileHandler) AutoClassify(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	var req struct {
+		FileID uint `json:"file_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "参数错误"})
+		return
+	}
+	tags, err := h.fileService.AutoClassifyFile(userID, req.FileID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "分类完成", "data": gin.H{"tags": tags}})
+}
+
+// BatchAutoClassify 批量自动分类所有文件
+// POST /api/files/classify-all
+func (h *FileHandler) BatchAutoClassify(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	count, err := h.fileService.BatchAutoClassify(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": fmt.Sprintf("已分类 %d 个文件", count), "data": gin.H{"classified_count": count}})
+}
+
+// ==================== 文件夹上传 ====================
+
+// UploadWithPath 上传文件并保持目录结构（文件夹上传）
+// POST /api/files/upload-with-path
+func (h *FileHandler) UploadWithPath(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	parentIDStr := c.PostForm("parent_id")
+	relativePath := c.PostForm("relative_path") // 例如 "docs/sub/file.txt"
+	parentID := uint(0)
+	if parentIDStr != "" {
+		if id, err := strconv.ParseUint(parentIDStr, 10, 64); err == nil {
+			parentID = uint(id)
+		}
+	}
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请选择要上传的文件"})
+		return
+	}
+
+	// 如果有相对路径，先递归创建文件夹
+	targetParentID := parentID
+	if relativePath != "" {
+		// 取出目录部分
+		dir := filepath.Dir(relativePath)
+		if dir != "." && dir != "" {
+			folderID, err := h.fileService.CreateFolderByPath(userID, parentID, dir)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "创建文件夹失败: " + err.Error()})
+				return
+			}
+			targetParentID = folderID
+		}
+	}
+
+	fileItem, err := h.fileService.UploadFile(userID, targetParentID, file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "上传成功", "data": fileItem})
+}
+
+// ==================== S3 预签名 URL ====================
+
+// GetPresignedDownloadURL 获取 S3 预签名下载 URL
+// GET /api/files/presigned-download/:uuid
+func (h *FileHandler) GetPresignedDownloadURL(c *gin.Context) {
+	fileUUID := c.Param("uuid")
+	userID := c.GetUint("user_id")
+
+	file, err := h.fileService.GetFileByUUID(fileUUID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "文件不存在"})
+		return
+	}
+	if file.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "msg": "无权访问"})
+		return
+	}
+
+	store := h.fileService.GetStorage()
+	if store.Type() != "s3" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "当前存储类型不支持预签名 URL"})
+		return
+	}
+
+	url, err := store.GetPresignedURL(file.StorePath, "GET", 3600) // 1小时有效
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "生成预签名 URL 失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{
+		"url":       url,
+		"file_name": file.Name,
+		"expires":   3600,
+	}})
+}
+
+// GetPresignedUploadURL 获取 S3 预签名上传 URL
+// POST /api/files/presigned-upload
+func (h *FileHandler) GetPresignedUploadURL(c *gin.Context) {
+	userID := c.GetUint("user_id")
+
+	var req struct {
+		FileName string `json:"file_name" binding:"required"`
+		ParentID uint   `json:"parent_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "参数错误"})
+		return
+	}
+
+	store := h.fileService.GetStorage()
+	if store.Type() != "s3" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "当前存储类型不支持预签名 URL"})
+		return
+	}
+
+	// 生成存储路径
+	ext := filepath.Ext(req.FileName)
+	dateDir := fmt.Sprintf("%d/%s", userID, strings.ReplaceAll(strings.Split(fmt.Sprintf("%v", c.GetUint("user_id")), " ")[0], "-", "/"))
+	_ = dateDir
+	key := fmt.Sprintf("%d/%s/%s%s", userID, "presigned", c.GetString("username"), ext)
+
+	url, err := store.GetPresignedURL(key, "PUT", 3600)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "生成预签名 URL 失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{
+		"url":     url,
+		"key":     key,
+		"expires": 3600,
+	}})
+}
+
 // fileExists 检查文件是否存在
 func fileExists(path string) bool {
 	_, err := os.Stat(path)

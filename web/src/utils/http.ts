@@ -33,6 +33,10 @@ http.interceptors.response.use(
       if (res.code === 401) {
         return handleTokenRefresh(response.config)
       }
+      // MFA 需要验证码，透传给业务层处理（不弹错误提示）
+      if (res.code === 1001) {
+        return res
+      }
       message.error(res.msg || '请求失败')
       return Promise.reject(new Error(res.msg))
     }

@@ -241,3 +241,81 @@ export function restoreVersion(fileId: number, versionId: number) {
 export function deleteVersion(fileId: number, versionId: number) {
   return http.delete<any, ApiResponse>(`/files/versions/${fileId}/${versionId}`)
 }
+
+// ==================== 星标/归档 ====================
+
+// 切换星标
+export function toggleStar(fileId: number) {
+  return http.post<any, ApiResponse<{ is_starred: boolean }>>('/files/star', { file_id: fileId })
+}
+
+// 切换归档
+export function toggleArchive(fileId: number) {
+  return http.post<any, ApiResponse<{ is_archived: boolean }>>('/files/archive', { file_id: fileId })
+}
+
+// 星标文件列表
+export function getStarredFiles() {
+  return http.get<any, ApiResponse<FileItem[]>>('/files/starred')
+}
+
+// 归档文件列表
+export function getArchivedFiles() {
+  return http.get<any, ApiResponse<FileItem[]>>('/files/archived')
+}
+
+// ==================== 批量恢复 ====================
+
+// 批量恢复回收站文件
+export function batchRestore(fileIds: number[]) {
+  return http.post<any, ApiResponse>('/files/batch/restore', { file_ids: fileIds })
+}
+
+// ==================== AI 自动分类 ====================
+
+// 自动分类单个文件
+export function autoClassifyFile(fileId: number) {
+  return http.post<any, ApiResponse<{ tags: string[] }>>('/files/classify', { file_id: fileId })
+}
+
+// 批量自动分类所有文件
+export function batchAutoClassify() {
+  return http.post<any, ApiResponse<{ classified_count: number }>>('/files/classify-all')
+}
+
+// ==================== 文件夹上传 ====================
+
+// 带路径上传文件（文件夹上传）
+export function uploadFileWithPath(
+  parentId: number,
+  file: File,
+  relativePath: string,
+  onProgress?: (percent: number) => void
+) {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('parent_id', String(parentId))
+  formData.append('relative_path', relativePath)
+
+  return http.post<any, ApiResponse<FileItem>>('/files/upload-with-path', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 0,
+    onUploadProgress: (event) => {
+      if (event.total && onProgress) {
+        onProgress(Math.round((event.loaded / event.total) * 100))
+      }
+    },
+  })
+}
+
+// ==================== S3 预签名 URL ====================
+
+// 获取 S3 预签名下载 URL
+export function getPresignedDownloadUrl(uuid: string) {
+  return http.get<any, ApiResponse<{ url: string; file_name: string; expires: number }>>(`/files/presigned-download/${uuid}`)
+}
+
+// 获取 S3 预签名上传 URL
+export function getPresignedUploadUrl(data: { file_name: string; parent_id: number }) {
+  return http.post<any, ApiResponse<{ url: string; key: string; expires: number }>>('/files/presigned-upload', data)
+}

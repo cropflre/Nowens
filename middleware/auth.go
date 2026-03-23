@@ -39,12 +39,17 @@ func (m *AuthMiddleware) Auth() gin.HandlerFunc {
 		// 从 Header 获取 Token
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code": 401,
-				"msg":  "未提供认证信息",
-			})
-			c.Abort()
-			return
+			// 回退：从 URL query 参数获取（支持 img/video/iframe 等标签的请求）
+			if queryToken := c.Query("token"); queryToken != "" {
+				authHeader = "Bearer " + queryToken
+			} else {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code": 401,
+					"msg":  "未提供认证信息",
+				})
+				c.Abort()
+				return
+			}
 		}
 
 		// 解析 Bearer Token

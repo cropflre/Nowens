@@ -10,6 +10,7 @@ import {
   DownOutlined, StarOutlined, TagsOutlined, DashboardOutlined,
   TeamOutlined, ClockCircleOutlined, CameraOutlined,
   BulbOutlined, GlobalOutlined,
+  CopyOutlined, SafetyCertificateOutlined, BellOutlined,
 } from '@ant-design/icons'
 import { useUserStore } from '@/stores/user'
 import { useFileStore } from '@/stores/file'
@@ -113,6 +114,16 @@ export default function Layout() {
       key: '/trash',
       icon: <DeleteOutlined />,
       label: t('sidebar.trash'),
+    },
+    {
+      key: 'tools',
+      icon: <BulbOutlined />,
+      label: '工具',
+      children: [
+        { key: '/dedup', icon: <CopyOutlined />, label: '文件去重' },
+        { key: '/webhooks', icon: <BellOutlined />, label: 'Webhook 通知' },
+        { key: '/mfa', icon: <SafetyCertificateOutlined />, label: 'MFA 认证' },
+      ],
     },
     ...(user?.role === 'admin'
       ? [{ key: '/admin', icon: <SettingOutlined />, label: t('sidebar.admin') }]

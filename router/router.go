@@ -47,6 +47,9 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 	activityHandler := handler.NewActivityHandler()
 	searchHandler := handler.NewSearchHandler(searchService)
 	agentHandler := handler.NewAgentHandler()
+	dedupHandler := handler.NewDedupHandler(store)
+	webhookHandler := handler.NewWebhookHandler()
+	mfaHandler := handler.NewMFAHandler(auth)
 
 	// ==================== WebDAV 接口 ====================
 	// 支持所有 WebDAV 方法
@@ -246,6 +249,44 @@ func Setup(cfg *config.Config, auth *middleware.AuthMiddleware, store storage.St
 			agentGroup.GET("/:mount_id/download", agentHandler.DownloadAgentFile) // 下载 Agent 文件
 			agentGroup.POST("/:mount_id/sync", agentHandler.SyncAgentFiles)       // 同步 Agent 索引
 		}
+
+		// 文件去重接口
+		dedupGroup := authorized.Group("/dedup")
+		{
+			dedupGroup.GET("", dedupHandler.GetDuplicates)          // 获取重复文件列表
+			dedupGroup.POST("/clean", dedupHandler.CleanDuplicates) // 清理重复文件
+		}
+
+		// Webhook 通知接口
+		webhookGroup := authorized.Group("/webhooks")
+		{
+			webhookGroup.POST("", webhookHandler.CreateWebhook)        // 创建 Webhook
+			webhookGroup.GET("", webhookHandler.ListWebhooks)          // Webhook 列表
+			webhookGroup.PUT("/:id", webhookHandler.UpdateWebhook)     // 更新 Webhook
+			webhookGroup.DELETE("/:id", webhookHandler.DeleteWebhook)  // 删除 Webhook
+			webhookGroup.POST("/:id/test", webhookHandler.TestWebhook) // 测试 Webhook
+		}
+
+		// MFA 多因素认证接口
+		mfaGroup := authorized.Group("/mfa")
+		{
+			mfaGroup.GET("/status", mfaHandler.GetStatus) // 获取 MFA 状态
+			mfaGroup.POST("/setup", mfaHandler.Setup)     // 设置 MFA
+			mfaGroup.POST("/verify", mfaHandler.Verify)   // 验证并启用 MFA
+			mfaGroup.POST("/disable", mfaHandler.Disable) // 禁用 MFA
+		}
+
+		// 星标/归档/批量恢复/分类/文件夹上传/预签名接口
+		fileGroup.POST("/star", fileHandler.ToggleStar)                                 // 切换星标
+		fileGroup.POST("/archive", fileHandler.ToggleArchive)                           // 切换归档
+		fileGroup.GET("/starred", fileHandler.ListStarred)                              // 星标列表
+		fileGroup.GET("/archived", fileHandler.ListArchived)                            // 归档列表
+		fileGroup.POST("/batch/restore", fileHandler.BatchRestore)                      // 批量恢复
+		fileGroup.POST("/classify", fileHandler.AutoClassify)                           // AI 自动分类
+		fileGroup.POST("/classify-all", fileHandler.BatchAutoClassify)                  // 批量自动分类
+		fileGroup.POST("/upload-with-path", fileHandler.UploadWithPath)                 // 文件夹上传
+		fileGroup.GET("/presigned-download/:uuid", fileHandler.GetPresignedDownloadURL) // S3 预签名下载
+		fileGroup.POST("/presigned-upload", fileHandler.GetPresignedUploadURL)          // S3 预签名上传
 	}
 
 	// ==================== 管理员接口 ====================

@@ -27,7 +27,7 @@ func InitDB(cfg *config.Config) error {
 	}
 
 	// 自动迁移
-	if err := DB.AutoMigrate(&User{}, &FileItem{}, &ShareLink{}, &FileVersion{}, &AuditLog{}, &MountPoint{}, &IndexedFile{}, &Favorite{}, &Tag{}, &FileTag{}, &Notification{}, &SyncSchedule{}, &Workspace{}, &WorkspaceMember{}, &FolderPermission{}, &ChunkUpload{}, &Comment{}, &Activity{}); err != nil {
+	if err := DB.AutoMigrate(&User{}, &FileItem{}, &ShareLink{}, &FileVersion{}, &AuditLog{}, &MountPoint{}, &IndexedFile{}, &Favorite{}, &Tag{}, &FileTag{}, &Notification{}, &SyncSchedule{}, &Workspace{}, &WorkspaceMember{}, &FolderPermission{}, &ChunkUpload{}, &Comment{}, &Activity{}, &WebhookConfig{}, &UserMFA{}); err != nil {
 		return err
 	}
 
@@ -66,6 +66,8 @@ type FileItem struct {
 	Hash        string     `gorm:"size:64;index" json:"hash"`                // 文件哈希（用于秒传/去重）
 	IsTrash     bool       `gorm:"default:false;index" json:"is_trash"`      // 是否在回收站
 	IsEncrypted bool       `gorm:"default:false" json:"is_encrypted"`        // 是否加密存储
+	IsStarred   bool       `gorm:"default:false;index" json:"is_starred"`    // 是否星标
+	IsArchived  bool       `gorm:"default:false;index" json:"is_archived"`   // 是否归档
 	TrashedAt   *time.Time `json:"trashed_at,omitempty"`                     // 删除时间
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
@@ -275,6 +277,35 @@ type Activity struct {
 	TargetName string    `gorm:"size:512" json:"target_name"`          // 目标名称（文件名等）
 	Detail     string    `gorm:"size:1024" json:"detail,omitempty"`    // 额外详情
 	CreatedAt  time.Time `gorm:"index" json:"created_at"`
+}
+
+// ==================== Webhook 通知配置模型 ====================
+
+// WebhookConfig Webhook 通知配置
+type WebhookConfig struct {
+	ID        uint      `gorm:"primarykey" json:"id"`
+	UserID    uint      `gorm:"index;not null" json:"user_id"`          // 所属用户
+	Name      string    `gorm:"size:128;not null" json:"name"`          // 名称
+	URL       string    `gorm:"size:1024;not null" json:"url"`          // Webhook URL
+	Secret    string    `gorm:"size:256" json:"-"`                      // 签名密钥（可选）
+	Events    string    `gorm:"size:512;not null" json:"events"`        // 监听事件，逗号分隔：upload,download,delete,share,trash,restore
+	Platform  string    `gorm:"size:32;default:custom" json:"platform"` // 平台类型: custom / wechat_work / dingtalk / slack / feishu
+	Enabled   bool      `gorm:"default:true" json:"enabled"`            // 是否启用
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ==================== 多因素认证模型 ====================
+
+// UserMFA 用户 MFA 配置
+type UserMFA struct {
+	ID        uint      `gorm:"primarykey" json:"id"`
+	UserID    uint      `gorm:"uniqueIndex;not null" json:"user_id"` // 关联用户
+	Secret    string    `gorm:"size:128;not null" json:"-"`          // TOTP 密钥（不返回前端）
+	Enabled   bool      `gorm:"default:false" json:"enabled"`        // 是否已启用
+	Verified  bool      `gorm:"default:false" json:"verified"`       // 是否已验证（首次绑定时验证）
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ==================== 分片上传模型 ====================

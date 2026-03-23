@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"io"
+	"net/url"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -94,4 +96,31 @@ func (s *S3Storage) GetURL(key string) string {
 
 func (s *S3Storage) Type() string {
 	return "s3"
+}
+
+// GetPresignedURL 获取 S3 预签名 URL
+// operation: "GET" 下载, "PUT" 上传
+// expiry: URL 有效期（秒）
+func (s *S3Storage) GetPresignedURL(key string, operation string, expiry int) (string, error) {
+	ctx := context.Background()
+	duration := time.Duration(expiry) * time.Second
+	if duration == 0 {
+		duration = 1 * time.Hour // 默认 1 小时
+	}
+
+	switch operation {
+	case "PUT":
+		u, err := s.client.PresignedPutObject(ctx, s.bucket, key, duration)
+		if err != nil {
+			return "", err
+		}
+		return u.String(), nil
+	default: // GET
+		reqParams := make(url.Values)
+		u, err := s.client.PresignedGetObject(ctx, s.bucket, key, duration, reqParams)
+		if err != nil {
+			return "", err
+		}
+		return u.String(), nil
+	}
 }

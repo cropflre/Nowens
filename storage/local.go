@@ -60,6 +60,11 @@ func (s *LocalStorage) Type() string {
 	return "local"
 }
 
+// GetPresignedURL 本地存储不支持预签名 URL，返回空字符串
+func (s *LocalStorage) GetPresignedURL(key string, operation string, expiry int) (string, error) {
+	return "", nil
+}
+
 // GetFullPath 获取文件的完整磁盘路径（仅本地存储可用）
 func (s *LocalStorage) GetFullPath(key string) string {
 	return filepath.Join(s.baseDir, key)

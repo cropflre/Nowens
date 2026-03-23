@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import { Table, Button, Empty, Space, Modal, message } from 'antd'
-import { DeleteOutlined } from '@ant-design/icons'
+import { DeleteOutlined, UndoOutlined } from '@ant-design/icons'
 import type { FileItem } from '@/types'
-import { getTrashList, restoreFile, deleteFile } from '@/api/file'
+import { getTrashList, restoreFile, deleteFile, batchRestore } from '@/api/file'
 import { formatFileSize, formatDate, getFileColor } from '@/utils'
 
 export default function Trash() {
   const [files, setFiles] = useState<FileItem[]>([])
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
 
   useEffect(() => { loadTrash() }, [])
 
@@ -14,6 +15,7 @@ export default function Trash() {
     try {
       const res = await getTrashList()
       setFiles(res.data || [])
+      setSelectedIds([])
     } catch {}
   }
 
@@ -23,6 +25,27 @@ export default function Trash() {
       message.success('已恢复')
       loadTrash()
     } catch {}
+  }
+
+  const handleBatchRestore = async () => {
+    if (selectedIds.length === 0) {
+      message.warning('请先选择要恢复的文件')
+      return
+    }
+    Modal.confirm({
+      title: '批量恢复',
+      content: `确定要恢复选中的 ${selectedIds.length} 个文件吗？`,
+      okText: '恢复',
+      onOk: async () => {
+        try {
+          await batchRestore(selectedIds)
+          message.success(`已恢复 ${selectedIds.length} 个文件`)
+          loadTrash()
+        } catch {
+          message.error('批量恢复失败')
+        }
+      },
+    })
   }
 
   const handleDelete = (file: FileItem) => {
@@ -94,15 +117,33 @@ export default function Trash() {
         <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 18, color: '#303133' }}>
           <DeleteOutlined /> 回收站
         </h3>
-        <Button danger disabled={files.length === 0} onClick={handleClearAll}>
-          清空回收站
-        </Button>
+        <Space>
+          <Button
+            icon={<UndoOutlined />}
+            disabled={selectedIds.length === 0}
+            onClick={handleBatchRestore}
+          >
+            批量恢复 {selectedIds.length > 0 && `(${selectedIds.length})`}
+          </Button>
+          <Button danger disabled={files.length === 0} onClick={handleClearAll}>
+            清空回收站
+          </Button>
+        </Space>
       </div>
 
       {files.length === 0 ? (
         <Empty description="回收站是空的" />
       ) : (
-        <Table dataSource={files} columns={columns} rowKey="id" pagination={false} />
+        <Table
+          dataSource={files}
+          columns={columns}
+          rowKey="id"
+          pagination={false}
+          rowSelection={{
+            selectedRowKeys: selectedIds,
+            onChange: (keys) => setSelectedIds(keys as number[]),
+          }}
+        />
       )}
     </div>
   )

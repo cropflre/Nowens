@@ -1072,3 +1072,221 @@ func (s *FileService) GetDashboardStats(userID uint) (map[string]interface{}, er
 		"upload_trend":      uploadTrend,
 	}, nil
 }
+
+// ==================== 星标/归档 ====================
+
+// ToggleStar 切换文件星标状态
+func (s *FileService) ToggleStar(userID uint, fileID uint) (bool, error) {
+	var file model.FileItem
+	if err := model.DB.Where("id = ? AND user_id = ?", fileID, userID).First(&file).Error; err != nil {
+		return false, errors.New("文件不存在")
+	}
+	newState := !file.IsStarred
+	model.DB.Model(&file).Update("is_starred", newState)
+	return newState, nil
+}
+
+// ToggleArchive 切换文件归档状态
+func (s *FileService) ToggleArchive(userID uint, fileID uint) (bool, error) {
+	var file model.FileItem
+	if err := model.DB.Where("id = ? AND user_id = ?", fileID, userID).First(&file).Error; err != nil {
+		return false, errors.New("文件不存在")
+	}
+	newState := !file.IsArchived
+	model.DB.Model(&file).Update("is_archived", newState)
+	return newState, nil
+}
+
+// ListStarred 获取星标文件列表
+func (s *FileService) ListStarred(userID uint) ([]model.FileItem, error) {
+	var files []model.FileItem
+	if err := model.DB.Where("user_id = ? AND is_starred = ? AND is_trash = ?", userID, true, false).
+		Order("updated_at DESC").Find(&files).Error; err != nil {
+		return nil, errors.New("查询星标文件失败")
+	}
+	return files, nil
+}
+
+// ListArchived 获取归档文件列表
+func (s *FileService) ListArchived(userID uint) ([]model.FileItem, error) {
+	var files []model.FileItem
+	if err := model.DB.Where("user_id = ? AND is_archived = ? AND is_trash = ?", userID, true, false).
+		Order("updated_at DESC").Find(&files).Error; err != nil {
+		return nil, errors.New("查询归档文件失败")
+	}
+	return files, nil
+}
+
+// ==================== 批量恢复 ====================
+
+// BatchRestore 批量从回收站恢复文件
+func (s *FileService) BatchRestore(userID uint, fileIDs []uint) (int, error) {
+	result := model.DB.Model(&model.FileItem{}).
+		Where("user_id = ? AND id IN ? AND is_trash = ?", userID, fileIDs, true).
+		Updates(map[string]interface{}{
+			"is_trash":   false,
+			"trashed_at": nil,
+		})
+	return int(result.RowsAffected), result.Error
+}
+
+// ==================== AI 文件分类 ====================
+
+// AutoClassifyFile 根据文件名和 MIME 类型自动打标签
+func (s *FileService) AutoClassifyFile(userID uint, fileID uint) ([]string, error) {
+	var file model.FileItem
+	if err := model.DB.Where("id = ? AND user_id = ?", fileID, userID).First(&file).Error; err != nil {
+		return nil, errors.New("文件不存在")
+	}
+
+	tags := classifyByRules(file.Name, file.MimeType)
+
+	// 自动创建并关联标签
+	for _, tagName := range tags {
+		var tag model.Tag
+		// 查找或创建标签
+		if err := model.DB.Where("user_id = ? AND name = ?", userID, tagName).First(&tag).Error; err != nil {
+			tag = model.Tag{
+				UserID: userID,
+				Name:   tagName,
+				Color:  getTagColor(tagName),
+			}
+			model.DB.Create(&tag)
+		}
+
+		// 关联文件和标签（忽略重复）
+		var count int64
+		model.DB.Model(&model.FileTag{}).Where("file_id = ? AND tag_id = ?", fileID, tag.ID).Count(&count)
+		if count == 0 {
+			model.DB.Create(&model.FileTag{FileID: fileID, TagID: tag.ID})
+		}
+	}
+
+	return tags, nil
+}
+
+// BatchAutoClassify 批量自动分类
+func (s *FileService) BatchAutoClassify(userID uint) (int, error) {
+	var files []model.FileItem
+	model.DB.Where("user_id = ? AND is_dir = ? AND is_trash = ?", userID, false, false).Find(&files)
+
+	classified := 0
+	for _, file := range files {
+		tags, err := s.AutoClassifyFile(userID, file.ID)
+		if err == nil && len(tags) > 0 {
+			classified++
+		}
+	}
+	return classified, nil
+}
+
+// classifyByRules 基于规则的文件分类
+func classifyByRules(fileName string, mimeType string) []string {
+	var tags []string
+	lowerName := strings.ToLower(fileName)
+	ext := strings.ToLower(filepath.Ext(fileName))
+
+	// 按 MIME 类型大分类
+	switch {
+	case strings.HasPrefix(mimeType, "image/"):
+		tags = append(tags, "图片")
+		if strings.Contains(mimeType, "svg") {
+			tags = append(tags, "矢量图")
+		}
+		if ext == ".psd" || ext == ".ai" {
+			tags = append(tags, "设计素材")
+		}
+	case strings.HasPrefix(mimeType, "video/"):
+		tags = append(tags, "视频")
+	case strings.HasPrefix(mimeType, "audio/"):
+		tags = append(tags, "音频")
+	case mimeType == "application/pdf":
+		tags = append(tags, "PDF文档")
+	case strings.Contains(mimeType, "word") || ext == ".doc" || ext == ".docx":
+		tags = append(tags, "Word文档")
+	case strings.Contains(mimeType, "spreadsheet") || ext == ".xls" || ext == ".xlsx" || ext == ".csv":
+		tags = append(tags, "表格")
+	case strings.Contains(mimeType, "presentation") || ext == ".ppt" || ext == ".pptx":
+		tags = append(tags, "演示文稿")
+	case strings.HasPrefix(mimeType, "text/"):
+		tags = append(tags, "文本")
+	case ext == ".zip" || ext == ".rar" || ext == ".7z" || ext == ".tar" || ext == ".gz":
+		tags = append(tags, "压缩包")
+	case ext == ".exe" || ext == ".msi" || ext == ".dmg" || ext == ".apk" || ext == ".deb":
+		tags = append(tags, "安装包")
+	}
+
+	// 按文件名关键词分类
+	if strings.Contains(lowerName, "screenshot") || strings.Contains(lowerName, "截图") || strings.Contains(lowerName, "screen") {
+		tags = append(tags, "截图")
+	}
+	if strings.Contains(lowerName, "backup") || strings.Contains(lowerName, "备份") {
+		tags = append(tags, "备份")
+	}
+	if strings.Contains(lowerName, "resume") || strings.Contains(lowerName, "简历") {
+		tags = append(tags, "简历")
+	}
+	if strings.Contains(lowerName, "invoice") || strings.Contains(lowerName, "发票") || strings.Contains(lowerName, "receipt") {
+		tags = append(tags, "票据")
+	}
+	if strings.Contains(lowerName, "contract") || strings.Contains(lowerName, "合同") {
+		tags = append(tags, "合同")
+	}
+	if strings.Contains(lowerName, "report") || strings.Contains(lowerName, "报告") {
+		tags = append(tags, "报告")
+	}
+
+	return tags
+}
+
+// getTagColor 根据标签名称自动分配颜色
+func getTagColor(name string) string {
+	colors := map[string]string{
+		"图片": "#e6a23c", "视频": "#9b59b6", "音频": "#e91e63", "PDF文档": "#f5222d",
+		"Word文档": "#1890ff", "表格": "#52c41a", "演示文稿": "#fa8c16", "文本": "#13c2c2",
+		"压缩包": "#722ed1", "安装包": "#eb2f96", "截图": "#faad14", "备份": "#a0d911",
+		"简历": "#1890ff", "票据": "#fa541c", "合同": "#2f54eb", "报告": "#13c2c2",
+		"矢量图": "#ff85c0", "设计素材": "#b37feb",
+	}
+	if c, ok := colors[name]; ok {
+		return c
+	}
+	return "#1890ff"
+}
+
+// ==================== 拖拽文件夹上传辅助 ====================
+
+// CreateFolderByPath 根据相对路径递归创建文件夹，返回最深层文件夹的 ID
+func (s *FileService) CreateFolderByPath(userID uint, rootParentID uint, relativePath string) (uint, error) {
+	if relativePath == "" {
+		return rootParentID, nil
+	}
+
+	parts := strings.Split(strings.TrimSuffix(relativePath, "/"), "/")
+	currentParentID := rootParentID
+
+	for _, folderName := range parts {
+		if folderName == "" {
+			continue
+		}
+
+		// 查找是否已存在同名文件夹
+		var existing model.FileItem
+		err := model.DB.Where("user_id = ? AND parent_id = ? AND name = ? AND is_dir = ? AND is_trash = ?",
+			userID, currentParentID, folderName, true, false).First(&existing).Error
+
+		if err == nil {
+			// 已存在，直接进入下一层
+			currentParentID = existing.ID
+		} else {
+			// 不存在，创建
+			folder, err := s.CreateFolder(userID, currentParentID, folderName)
+			if err != nil {
+				return 0, err
+			}
+			currentParentID = folder.ID
+		}
+	}
+
+	return currentParentID, nil
+}

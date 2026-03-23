@@ -33,6 +33,7 @@ type RegisterRequest struct {
 type LoginRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
+	MFACode  string `json:"mfa_code"` // MFA 验证码（可选）
 }
 
 // Register 用户注册
@@ -89,6 +90,28 @@ func (h *UserHandler) Login(c *gin.Context) {
 			"msg":  err.Error(),
 		})
 		return
+	}
+
+	// 检查是否启用了 MFA
+	mfaService := service.NewMFAService()
+	if mfaService.IsMFAEnabled(user.ID) {
+		if req.MFACode == "" {
+			// 需要 MFA 但未提供验证码，返回特殊码让前端弹出输入框
+			c.JSON(http.StatusOK, gin.H{
+				"code": 1001,
+				"msg":  "需要 MFA 验证码",
+				"data": gin.H{"mfa_required": true},
+			})
+			return
+		}
+		// 验证 MFA 码
+		if err := mfaService.ValidateMFA(user.ID, req.MFACode); err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code": 401,
+				"msg":  err.Error(),
+			})
+			return
+		}
 	}
 
 	accessToken, refreshToken, err := h.auth.GenerateTokenPair(user.ID, user.Username, user.Role)
